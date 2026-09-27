@@ -13,6 +13,9 @@ void kill_self() {
 }
 
 bool check_signature() {
+#ifdef NEKOGRAM_DEBUG_BUILD
+    return true;
+#else
     std::hash<std::string> hasher;
     DIR *dir = opendir("/proc/self/fd"_iobfs.c_str());
     int dir_fd = dirfd(dir);
@@ -54,4 +57,5 @@ bool check_signature() {
         kill_self();
     }
     return checked;
+#endif
 }

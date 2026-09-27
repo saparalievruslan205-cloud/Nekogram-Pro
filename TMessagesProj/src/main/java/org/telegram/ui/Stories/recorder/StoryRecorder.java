@@ -45,9 +45,11 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.Camera;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Parcelable;
+import android.provider.MediaStore;
 import android.text.Layout;
 import android.text.Spannable;
 import android.text.SpannableString;
@@ -78,6 +80,8 @@ import android.window.OnBackInvokedDispatcher;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.graphics.Insets;
 import androidx.core.math.MathUtils;
@@ -106,6 +110,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
@@ -181,6 +186,8 @@ import java.util.List;
 
 public class StoryRecorder implements NotificationCenter.NotificationCenterDelegate {
 
+    public static final int REQUEST_CODE_SYSTEM_PHOTO_PICKER = 118;
+
     private final Theme.ResourcesProvider resourcesProvider = new DarkThemeResourceProvider();
 
     private final Activity activity;
@@ -188,6 +195,10 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
 
     private boolean isShown;
     private boolean prepareClosing;
+    private boolean pendingPhotoPickerSingleSelection;
+    private boolean pendingPhotoPickerForAddingPart;
+    private boolean photoPickerProcessing;
+    private int pendingPhotoPickerMaxItems;
 
     private final WindowManager windowManager;
     private final WindowManager.LayoutParams windowLayoutParams;
@@ -1242,6 +1253,9 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
                 scrollingY = false;
                 scrollingX = false;
             }
+            if (ev.getAction() == MotionEvent.ACTION_UP || ev.getAction() == MotionEvent.ACTION_CANCEL) {
+                systemPhotoPickerGestureLaunched = false;
+            }
             return super.dispatchTouchEvent(ev);
         }
 
@@ -1304,6 +1318,7 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
             public boolean onDown(@NonNull MotionEvent e) {
                 sty = 0;
                 stx = 0;
+                systemPhotoPickerGestureLaunched = false;
                 return false;
             }
 
@@ -1335,6 +1350,9 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
                 }
                 if (takingVideo || takingPhoto || currentPage != PAGE_CAMERA) {
                     return false;
+                }
+                if (systemPhotoPickerGestureLaunched) {
+                    return true;
                 }
                 if (!scrollingX) {
                     sty += distanceY;
@@ -1368,7 +1386,9 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
                     } else {
                         containerView.setTranslationY(0);
                         if (galleryListView == null) {
-                            createGalleryListView();
+                            systemPhotoPickerGestureLaunched = true;
+                            launchSystemPhotoPicker(false);
+                            return true;
                         }
                         galleryListView.setTranslationY(galleryMax + ty);
                     }
@@ -1925,6 +1945,7 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
     private VideoTimerView videoTimerView;
     private boolean wasGalleryOpen;
     private boolean galleryClosing;
+    private boolean systemPhotoPickerGestureLaunched;
     private GalleryListView galleryListView;
     private DraftSavedHint draftSavedHint;
     private RecordControl recordControl;
@@ -2938,8 +2959,6 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
         showVideoTimer(false, false);
         actionBarContainer.addView(videoTimerView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 45, Gravity.TOP | Gravity.FILL_HORIZONTAL, 56, 0, 56, 0));
         flashViews.add(videoTimerView);
-
-        MediaController.loadGalleryPhotosAlbums(0);
 
         recordControl = new RecordControl(context);
         recordControl.setDelegate(recordControlDelegate);
@@ -4178,8 +4197,8 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
 
         @Override
         public void onGalleryClick() {
-            if (currentPage == PAGE_CAMERA && !takingPhoto && !takingVideo && requestGalleryPermission()) {
-                animateGalleryListView(true);
+            if (currentPage == PAGE_CAMERA && !takingPhoto && !takingVideo) {
+                launchSystemPhotoPicker(false);
             }
         }
 
@@ -5655,8 +5674,7 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
             protected void onGalleryClick() {
                 captionEdit.keyboardNotifier.ignore(true);
                 destroyGalleryListView();
-                createGalleryListView(true);
-                animateGalleryListView(true);
+                launchSystemPhotoPicker(true);
             }
 
             @Override
@@ -7223,26 +7241,345 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
         }
     }
 
-    private boolean requestGalleryPermission() {
-        if (activity != null) {
-            boolean noGalleryPermission = false;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                noGalleryPermission = (
-                    activity.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED ||
-                    activity.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED
-                );
-                if (noGalleryPermission) {
-                    activity.requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO}, 114);
-                }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                noGalleryPermission = activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED;
-                if (noGalleryPermission) {
-                    activity.requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 114);
-                }
+    private void launchSystemPhotoPicker(boolean forAddingPart) {
+        if (activity == null || pendingPhotoPickerMaxItems > 0 || photoPickerProcessing) {
+            return;
+        }
+
+        int maxItems = forAddingPart ? 1 : StoryEntry.MAX_ENTRIES;
+        if (!forAddingPart && collageLayoutView != null && collageLayoutView.hasLayout()) {
+            int remainingSlots = CollageLayout.getMaxCount() - collageLayoutView.getFilledCount();
+            if (remainingSlots <= 0) {
+                return;
             }
-            return !noGalleryPermission;
+            maxItems = Math.min(maxItems, remainingSlots);
+        }
+        if (Build.VERSION.SDK_INT >= 33 && maxItems > 1) {
+            maxItems = Math.min(maxItems, MediaStore.getPickImagesMaxLimit());
+        }
+
+        pendingPhotoPickerSingleSelection = maxItems <= 1;
+        pendingPhotoPickerForAddingPart = forAddingPart;
+        pendingPhotoPickerMaxItems = maxItems;
+        ActivityResultContracts.PickVisualMedia.VisualMediaType mediaType = forAddingPart
+                ? ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE
+                : ActivityResultContracts.PickVisualMedia.ImageAndVideo.INSTANCE;
+        try {
+            Intent intent;
+            if (pendingPhotoPickerSingleSelection) {
+                intent = new ActivityResultContracts.PickVisualMedia().createIntent(activity,
+                        new PickVisualMediaRequest.Builder().setMediaType(mediaType).build());
+            } else {
+                PickVisualMediaRequest request = new PickVisualMediaRequest.Builder()
+                        .setMediaType(mediaType)
+                        .setMaxItems(maxItems)
+                        .setOrderedSelection(true)
+                        .build();
+                intent = new ActivityResultContracts.PickMultipleVisualMedia(maxItems).createIntent(activity, request);
+            }
+            activity.startActivityForResult(intent, REQUEST_CODE_SYSTEM_PHOTO_PICKER);
+        } catch (Throwable e) {
+            clearPendingPhotoPickerRequest();
+            FileLog.e(e);
+        }
+    }
+
+    public static boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQUEST_CODE_SYSTEM_PHOTO_PICKER) {
+            return false;
+        }
+        if (instance != null) {
+            instance.onSystemPhotoPickerResult(resultCode, data);
         }
         return true;
+    }
+
+    private void clearPendingPhotoPickerRequest() {
+        pendingPhotoPickerSingleSelection = false;
+        pendingPhotoPickerForAddingPart = false;
+        pendingPhotoPickerMaxItems = 0;
+    }
+
+    private void onSystemPhotoPickerResult(int resultCode, Intent data) {
+        boolean singleSelection = pendingPhotoPickerSingleSelection;
+        boolean forAddingPart = pendingPhotoPickerForAddingPart;
+        int maxItems = Math.max(1, pendingPhotoPickerMaxItems);
+        clearPendingPhotoPickerRequest();
+        if (resultCode != Activity.RESULT_OK) {
+            return;
+        }
+
+        ArrayList<Uri> selectedUris = new ArrayList<>();
+        try {
+            if (singleSelection) {
+                Uri uri = new ActivityResultContracts.PickVisualMedia().parseResult(resultCode, data);
+                if (uri != null) {
+                    selectedUris.add(uri);
+                }
+            } else {
+                List<Uri> uris = new ActivityResultContracts.PickMultipleVisualMedia(maxItems).parseResult(resultCode, data);
+                if (uris != null) {
+                    selectedUris.addAll(uris.subList(0, Math.min(uris.size(), maxItems)));
+                }
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return;
+        }
+        if (selectedUris.isEmpty()) {
+            return;
+        }
+        photoPickerProcessing = true;
+
+        Utilities.globalQueue.postRunnable(() -> {
+            ArrayList<MediaController.PhotoEntry> entries = new ArrayList<>(selectedUris.size());
+            for (Uri uri : selectedUris) {
+                String path = null;
+                try {
+                    String mimeType = ApplicationLoader.applicationContext.getContentResolver().getType(uri);
+                    String fileName = MediaController.getFileName(uri);
+                    boolean isVisualMimeType = mimeType != null && (mimeType.startsWith("image/") || mimeType.startsWith("video/"));
+                    String extension = isVisualMimeType ? android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) : null;
+                    if (!isVisualMimeType && fileName != null) {
+                        int dot = fileName.lastIndexOf('.');
+                        if (dot >= 0) {
+                            extension = fileName.substring(dot + 1);
+                        }
+                    }
+                    if (!isVisualMimeType && !TextUtils.isEmpty(extension)) {
+                        mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.toLowerCase(java.util.Locale.US));
+                    }
+                    boolean isVideo = mimeType != null && mimeType.startsWith("video/");
+                    if (forAddingPart && isVideo) {
+                        continue;
+                    }
+                    if (TextUtils.isEmpty(extension)) {
+                        extension = isVideo ? "mp4" : "jpg";
+                    }
+                    path = MediaController.copyFileToCache(uri, extension, FileLoader.DEFAULT_MAX_FILE_SIZE);
+                    if (TextUtils.isEmpty(path)) {
+                        continue;
+                    }
+                    MediaController.PhotoEntry entry = createPhotoEntryFromPickedFile(path, isVideo);
+                    if (entry != null) {
+                        entries.add(entry);
+                    } else {
+                        new File(path).delete();
+                    }
+                } catch (Throwable e) {
+                    if (path != null) {
+                        new File(path).delete();
+                    }
+                    FileLog.e(e);
+                }
+            }
+            AndroidUtilities.runOnUIThread(() -> {
+                photoPickerProcessing = false;
+                handlePickedStoryPhotos(entries, forAddingPart);
+            });
+        });
+    }
+
+    private MediaController.PhotoEntry createPhotoEntryFromPickedFile(String path, boolean isVideo) {
+        File file = new File(path);
+        if (isVideo) {
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            try {
+                retriever.setDataSource(path);
+                String durationValue = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                String widthValue = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+                String heightValue = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+                long durationMs = TextUtils.isEmpty(durationValue) ? 0 : Long.parseLong(durationValue);
+                if (durationMs <= 0) {
+                    return null;
+                }
+                int width = TextUtils.isEmpty(widthValue) ? 0 : Integer.parseInt(widthValue);
+                int height = TextUtils.isEmpty(heightValue) ? 0 : Integer.parseInt(heightValue);
+                int durationSeconds = Math.max(1, (int) (durationMs / 1000));
+                int imageId = path.hashCode();
+                String thumbPath = createPickedVideoThumbnail(path, retriever, width, height);
+                if (TextUtils.isEmpty(thumbPath)) {
+                    return null;
+                }
+                MediaController.PhotoEntry entry = new MediaController.PhotoEntry(0, imageId, 0, path, 0, durationSeconds, true, width, height, file.length());
+                entry.thumbPath = thumbPath;
+                return entry;
+            } catch (Throwable e) {
+                FileLog.e(e);
+                return null;
+            } finally {
+                try {
+                    retriever.release();
+                } catch (Exception ignore) {}
+            }
+        }
+
+        try {
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(path, options);
+            if (options.outWidth <= 0 || options.outHeight <= 0) {
+                return null;
+            }
+            Pair<Integer, Integer> orientation = AndroidUtilities.getImageOrientation(path);
+            int imageId = path.hashCode();
+            MediaController.PhotoEntry entry = new MediaController.PhotoEntry(0, imageId, 0, path, orientation.first, false, options.outWidth, options.outHeight, file.length());
+            entry.setOrientation(orientation);
+            return entry;
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return null;
+        }
+    }
+
+    private String createPickedVideoThumbnail(String path, MediaMetadataRetriever retriever, int width, int height) {
+        Bitmap bitmap = null;
+        File thumbnailFile = null;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                int maxDimension = Math.max(width, height);
+                float scale = maxDimension > 0 ? Math.min(1f, 512f / maxDimension) : 1f;
+                int targetWidth = width > 0 ? Math.max(1, Math.round(width * scale)) : 512;
+                int targetHeight = height > 0 ? Math.max(1, Math.round(height * scale)) : 512;
+                bitmap = retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, targetWidth, targetHeight);
+            }
+            if (bitmap == null) {
+                bitmap = SendMessagesHelper.createVideoThumbnail(path, MediaStore.Video.Thumbnails.MINI_KIND);
+            }
+            if (bitmap == null) {
+                return null;
+            }
+            thumbnailFile = StoryEntry.makeCacheFile(currentAccount, "jpg");
+            if (thumbnailFile == null) {
+                return null;
+            }
+            try (FileOutputStream output = new FileOutputStream(thumbnailFile)) {
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)) {
+                    thumbnailFile.delete();
+                    return null;
+                }
+            }
+            return thumbnailFile.getAbsolutePath();
+        } catch (Throwable e) {
+            FileLog.e(e);
+            if (thumbnailFile != null) {
+                thumbnailFile.delete();
+            }
+            return null;
+        } finally {
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private void handlePickedStoryPhotos(ArrayList<MediaController.PhotoEntry> photos, boolean forAddingPart) {
+        if (photos == null || photos.isEmpty()) {
+            return;
+        }
+        if (instance != this || windowView == null) {
+            deletePickedPhotoEntries(photos);
+            return;
+        }
+        if (forAddingPart) {
+            if (outputEntry == null || paintView == null) {
+                deletePickedPhotoEntries(photos);
+                return;
+            }
+            outputEntry.editedMedia = true;
+            paintView.appearAnimation(paintView.createPhoto(photos.get(0).path, false));
+            return;
+        }
+        if (currentPage != PAGE_CAMERA) {
+            deletePickedPhotoEntries(photos);
+            return;
+        }
+
+        entries = null;
+        selectedEntries = null;
+        selectedEntriesOrder = null;
+        outputEntry = null;
+        showVideoTimer(false, true);
+        modeSwitcherView.switchMode(mode);
+        recordControl.startAsVideo(mode == MODE_VIDEO);
+        fromGallery = true;
+
+        if (collageLayoutView != null && collageLayoutView.hasLayout()) {
+            for (MediaController.PhotoEntry photo : photos) {
+                StoryEntry storyEntry = createStoryEntryFromPickedPhoto(photo);
+                if (collageLayoutView.push(storyEntry)) {
+                    outputEntry = StoryEntry.asCollage(collageLayoutView.getLayout(), collageLayoutView.getContent());
+                    mode = outputEntry.isVideo ? MODE_VIDEO : MODE_PHOTO;
+                    modeSwitcherView.switchMode(mode);
+                    recordControl.startAsVideo(mode == MODE_VIDEO);
+                    break;
+                }
+            }
+            updateActionBarButtons(true);
+            return;
+        }
+
+        for (MediaController.PhotoEntry photo : photos) {
+            StoryEntry storyEntry = createStoryEntryFromPickedPhoto(photo);
+            if (outputEntry == null) {
+                mode = storyEntry.isVideo ? MODE_VIDEO : MODE_PHOTO;
+                modeSwitcherView.switchMode(mode);
+                recordControl.startAsVideo(mode == MODE_VIDEO);
+                outputEntry = storyEntry;
+            } else {
+                if (entries == null) {
+                    entries = new ArrayList<>();
+                    entries.add(outputEntry);
+                }
+                if (entries.size() >= StoryEntry.MAX_ENTRIES) {
+                    storyEntry.destroy(false);
+                    break;
+                }
+                entries.add(storyEntry);
+            }
+        }
+
+        if (entries != null) {
+            selectedEntries = new ArrayList<>();
+            selectedEntriesOrder = new ArrayList<>();
+            for (int i = 0; i < entries.size(); ++i) {
+                selectedEntries.add(i);
+                selectedEntriesOrder.add(i);
+            }
+            collageLayoutView.set(null, true);
+            collageListView.setVisible(false, true);
+            updateActionBarButtons(true);
+            navigateTo(PAGE_PREVIEW, true);
+            if (storiesSelector != null) {
+                storiesSelector.showHint();
+            }
+        } else if (outputEntry != null) {
+            outputEntry.setupMultipleStoriesSelector();
+            StoryPrivacySelector.applySaved(currentAccount, outputEntry);
+            collageListView.setVisible(false, true);
+            updateActionBarButtons(true);
+            navigateTo(PAGE_PREVIEW, true);
+        }
+    }
+
+    private StoryEntry createStoryEntryFromPickedPhoto(MediaController.PhotoEntry photo) {
+        StoryEntry storyEntry = StoryEntry.fromPhotoEntry(photo);
+        storyEntry.fileDeletable = true;
+        storyEntry.botId = botId;
+        storyEntry.botLang = botLang;
+        storyEntry.setupMatrix();
+        return storyEntry;
+    }
+
+    private void deletePickedPhotoEntries(ArrayList<MediaController.PhotoEntry> photos) {
+        for (MediaController.PhotoEntry photo : photos) {
+            if (photo.path != null) {
+                new File(photo.path).delete();
+            }
+            if (photo.thumbPath != null && !photo.thumbPath.startsWith("vthumb://")) {
+                new File(photo.thumbPath).delete();
+            }
+        }
     }
 
     private boolean requestAudioPermission() {
@@ -7264,6 +7601,7 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
 
     private Runnable whenOpenDone;
     private void onResumeInternal() {
+        systemPhotoPickerGestureLaunched = false;
         if (currentPage == PAGE_CAMERA) {
 //            requestedCameraPermission = false;
             if (openCloseAnimator != null && openCloseAnimator.isRunning()) {
@@ -7324,27 +7662,6 @@ public class StoryRecorder implements NotificationCenter.NotificationCenterDeleg
                 } else {
                     CameraController.getInstance().initCamera(this::createCameraView);
                 }
-            }
-        } else if (requestCode == 114) {
-            if (granted) {
-                MediaController.loadGalleryPhotosAlbums(0);
-                animateGalleryListView(true);
-            } else {
-                new AlertDialog.Builder(getContext(), resourcesProvider)
-                    .setTopAnimation(R.raw.permission_request_folder, AlertsCreator.PERMISSIONS_REQUEST_TOP_ICON_SIZE, false, Theme.getColor(Theme.key_dialogTopBackground))
-                    .setMessage(AndroidUtilities.replaceTags(getString(R.string.PermissionStorageWithHint)))
-                    .setPositiveButton(getString(R.string.PermissionOpenSettings), (dialogInterface, i) -> {
-                        try {
-                            Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                            intent.setData(Uri.parse("package:" + ApplicationLoader.applicationContext.getPackageName()));
-                            activity.startActivity(intent);
-                        } catch (Exception e) {
-                            FileLog.e(e);
-                        }
-                    })
-                    .setNegativeButton(getString(R.string.ContactsPermissionAlertNotNow), null)
-                    .create()
-                    .show();
             }
         } else if (requestCode == 112) {
             if (!granted) {

@@ -515,6 +515,14 @@ public class PhotoAttachPhotoCell extends FrameLayout {
         photoEntry = entry;
         isLast = last;
         this.allowLivePhotos = allowLivePhotos;
+        if (entry == null) {
+            imageView.setImageDrawable(Theme.chat_attachEmptyDrawable);
+            imageView.getImageReceiver().setVisible(true, true);
+            videoInfoContainer.setVisibility(INVISIBLE);
+            videoPlayImageView.setVisibility(GONE);
+            checkBox.setVisibility(INVISIBLE);
+            return;
+        }
         if (photoEntry.isVideo && !photoEntry.isLivePhoto()) {
             imageView.setOrientation(0, true);
             videoInfoContainer.setVisibility(VISIBLE);

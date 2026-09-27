@@ -2766,6 +2766,10 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
                     if (!photosEnabled && !videosEnabled && checkCanRemoveRestrictionsByBoosts()) {
                         return;
                     }
+                    if ((photosEnabled || videosEnabled) && baseFragment instanceof ChatActivity && avatarPicker == 0 && !storyMediaPicker && !isPollAttach && !isPhotoPicker) {
+                        ((ChatActivity) baseFragment).openSystemPhotoPickerFromAttachAlert();
+                        return;
+                    }
                     if (!photosEnabled && !videosEnabled) {
                         showLayout(restrictedLayout = new ChatAttachRestrictedLayout(1, this, getContext(), resourcesProvider));
                     }
@@ -6412,6 +6416,18 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
         }
         maxSelectedPhotos = value;
         allowOrder = order;
+    }
+
+    public int getMaxSelectedPhotos() {
+        return maxSelectedPhotos;
+    }
+
+    public boolean canSelectPhotos() {
+        return photosEnabled;
+    }
+
+    public boolean canSelectVideos() {
+        return videosEnabled;
     }
 
     public void setOpenWithFrontFaceCamera(boolean value) {

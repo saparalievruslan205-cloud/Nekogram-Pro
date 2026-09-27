@@ -6643,6 +6643,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                 webviewShareAPIDoneListener = null;
             }
         } else {
+            StoryRecorder.onActivityResult(requestCode, resultCode, data);
             ThemeEditorView editorView = ThemeEditorView.getInstance();
             if (editorView != null) {
                 editorView.onActivityResult(requestCode, resultCode, data);

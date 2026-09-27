@@ -11,6 +11,7 @@ package org.telegram.messenger;
 import android.annotation.TargetApi;
 import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
+import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -36,6 +37,7 @@ import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.Pair;
 import android.util.SparseArray;
+import android.util.Size;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -1238,9 +1240,19 @@ public class ImageLoader {
 
                             if (mediaId != null && mediaThumbPath == null) {
                                 if (mediaIsVideo) {
-                                    MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
+                                    if (Build.VERSION.SDK_INT >= 29) {
+                                        opts.outWidth = (int) w_filter;
+                                        opts.outHeight = (int) h_filter;
+                                    } else {
+                                        MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
+                                    }
                                 } else {
-                                    MediaStore.Images.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Images.Thumbnails.MINI_KIND, opts);
+                                    if (Build.VERSION.SDK_INT >= 29) {
+                                        opts.outWidth = (int) w_filter;
+                                        opts.outHeight = (int) h_filter;
+                                    } else {
+                                        MediaStore.Images.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Images.Thumbnails.MINI_KIND, opts);
+                                    }
                                 }
                             } else {
                                 if (secureDocumentKey != null) {
@@ -1452,17 +1464,41 @@ public class ImageLoader {
                         }
 
                         opts.inDither = false;
-                        if (mediaId != null && mediaThumbPath == null) {
+                        if (mediaId != null && (mediaThumbPath == null || Build.VERSION.SDK_INT >= 29 && !mediaIsVideo)) {
                             if (mediaIsVideo) {
                                 if (mediaId == 0) {
                                     AnimatedFileDrawable fileDrawable = new AnimatedFileDrawable(cacheFileFinal, true, 0, 0, null, null, null, 0, 0, true, null);
                                     image = fileDrawable.getFrameAtTime(0, true);
                                     fileDrawable.recycle();
                                 } else {
-                                    image = MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
+                                    if (Build.VERSION.SDK_INT >= 29) {
+                                        try {
+                                            int thumbWidth = Math.max(64, Math.min(512, (int) w_filter));
+                                            int thumbHeight = Math.max(64, Math.min(512, (int) h_filter));
+                                            image = ApplicationLoader.applicationContext.getContentResolver().loadThumbnail(
+                                                    ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId),
+                                                    new Size(thumbWidth, thumbHeight), null);
+                                        } catch (Throwable ignore) {
+                                            image = MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
+                                        }
+                                    } else {
+                                        image = MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
+                                    }
                                 }
                             } else {
-                                image = MediaStore.Images.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Images.Thumbnails.MINI_KIND, opts);
+                                if (Build.VERSION.SDK_INT >= 29) {
+                                    try {
+                                        int thumbWidth = Math.max(64, Math.min(512, w_filter > 0 ? (int) w_filter : 256));
+                                        int thumbHeight = Math.max(64, Math.min(512, h_filter > 0 ? (int) h_filter : 256));
+                                        image = ApplicationLoader.applicationContext.getContentResolver().loadThumbnail(
+                                                ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId),
+                                                new Size(thumbWidth, thumbHeight), null);
+                                    } catch (Throwable ignore) {
+                                        // Fall back to decoding the file path below.
+                                    }
+                                } else {
+                                    image = MediaStore.Images.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Images.Thumbnails.MINI_KIND, opts);
+                                }
                             }
                         }
                         if (!mediaIsVideo && image == null) {

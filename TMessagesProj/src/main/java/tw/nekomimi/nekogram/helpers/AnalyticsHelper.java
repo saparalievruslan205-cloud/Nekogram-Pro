@@ -46,19 +46,29 @@ public class AnalyticsHelper {
         firebaseAnalytics = FirebaseAnalytics.getInstance(application);
         firebaseAnalytics.setAnalyticsCollectionEnabled(true);
         firebaseAnalytics.setUserId(userId);
-        SentryAndroid.init(application, options -> {
-            options.setDsn(Extra.SENTRY_DSN);
-            options.setEnvironment(BuildConfig.BUILD_TYPE);
-            options.setPrintUncaughtStackTrace(true);
-            options.setSendDefaultPii(true);
-            options.setEnableUserInteractionTracing(true);
-            options.setAttachViewHierarchy(true);
-            options.setEnableSystemEventBreadcrumbsExtras(true);
-            options.setTracesSampleRate(0.01);
-        });
+        boolean sentryInitialized = false;
+        try {
+            if (Extra.SENTRY_DSN != null && !Extra.SENTRY_DSN.trim().isEmpty() && !"null".equalsIgnoreCase(Extra.SENTRY_DSN)) {
+                SentryAndroid.init(application, options -> {
+                    options.setDsn(Extra.SENTRY_DSN);
+                    options.setEnvironment(BuildConfig.BUILD_TYPE);
+                    options.setPrintUncaughtStackTrace(true);
+                    options.setSendDefaultPii(true);
+                    options.setEnableUserInteractionTracing(true);
+                    options.setAttachViewHierarchy(true);
+                    options.setEnableSystemEventBreadcrumbsExtras(true);
+                    options.setTracesSampleRate(0.01);
+                });
+                sentryInitialized = true;
+            }
+        } catch (RuntimeException e) {
+            FileLog.e("Analytics: failed to initialize Sentry", e);
+        }
         var user = new User();
         user.setId(userId);
-        Sentry.setUser(user);
+        if (sentryInitialized) {
+            Sentry.setUser(user);
+        }
 
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("Analytics: userId = " + userId);

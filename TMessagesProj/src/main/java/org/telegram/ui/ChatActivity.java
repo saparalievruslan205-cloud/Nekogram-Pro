@@ -111,6 +111,8 @@ import android.widget.TextView;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.collection.LongSparseArray;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
@@ -994,6 +996,14 @@ public class ChatActivity extends BaseFragment implements
     private Runnable unselectRunnable;
 
     private String currentPicturePath;
+    private boolean pendingSystemPhotoPickerSingle;
+    private int pendingSystemPhotoPickerMaxItems;
+    private boolean systemPhotoPickerProcessing;
+    private CharSequence pendingSystemPhotoPickerCaption;
+    private boolean pendingSystemPhotoPickerAllowImages;
+    private boolean pendingSystemPhotoPickerAllowVideos;
+
+    private static final int REQUEST_CODE_SYSTEM_PHOTO_PICKER = 23;
 
     private ChatObject.Call groupCall;
     private boolean lastCallCheckFromServer;
@@ -13963,6 +13973,165 @@ public class ChatActivity extends BaseFragment implements
         return true;
     }
 
+    public void openSystemPhotoPickerFromAttachAlert() {
+        CharSequence caption = chatAttachAlert != null && chatAttachAlert.getCommentView() != null
+                ? chatAttachAlert.getCommentView().getText()
+                : null;
+        launchSystemPhotoPicker(caption);
+    }
+
+    private void launchSystemPhotoPicker(CharSequence caption) {
+        if (pendingSystemPhotoPickerMaxItems > 0 || systemPhotoPickerProcessing) {
+            return;
+        }
+        Activity activity = getParentActivity();
+        if (activity == null) {
+            return;
+        }
+
+        int requestedMaxItems = chatAttachAlert != null ? chatAttachAlert.getMaxSelectedPhotos() : 10;
+        if (editingMessageObject != null || chatMode == MODE_WELCOME_MESSAGES) {
+            requestedMaxItems = 1;
+        } else if (currentChat != null && !ChatObject.hasAdminRights(currentChat) && currentChat.slowmode_enabled) {
+            requestedMaxItems = 10;
+        }
+        int maxItems = requestedMaxItems == 1 ? 1 : requestedMaxItems > 1 ? Math.min(requestedMaxItems, 150) : 150;
+        if (Build.VERSION.SDK_INT >= 33 && maxItems > 1) {
+            maxItems = Math.min(maxItems, MediaStore.getPickImagesMaxLimit());
+        }
+        pendingSystemPhotoPickerSingle = maxItems <= 1;
+        pendingSystemPhotoPickerMaxItems = Math.max(2, maxItems);
+        pendingSystemPhotoPickerCaption = caption;
+        boolean stickerMode = chatAttachAlert != null && chatAttachAlert.isStickerMode;
+        pendingSystemPhotoPickerAllowImages = stickerMode || chatAttachAlert == null || chatAttachAlert.canSelectPhotos();
+        pendingSystemPhotoPickerAllowVideos = !stickerMode && (chatAttachAlert == null || chatAttachAlert.canSelectVideos());
+        ActivityResultContracts.PickVisualMedia.VisualMediaType mediaType;
+        if (pendingSystemPhotoPickerAllowImages && pendingSystemPhotoPickerAllowVideos) {
+            mediaType = ActivityResultContracts.PickVisualMedia.ImageAndVideo.INSTANCE;
+        } else if (pendingSystemPhotoPickerAllowVideos) {
+            mediaType = ActivityResultContracts.PickVisualMedia.VideoOnly.INSTANCE;
+        } else {
+            mediaType = ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE;
+        }
+
+        try {
+            Intent intent;
+            PickVisualMediaRequest request = new PickVisualMediaRequest.Builder()
+                    .setMediaType(mediaType)
+                    .setMaxItems(Math.max(2, maxItems))
+                    .setOrderedSelection(true)
+                    .build();
+            if (pendingSystemPhotoPickerSingle) {
+                intent = new ActivityResultContracts.PickVisualMedia().createIntent(activity,
+                        new PickVisualMediaRequest.Builder()
+                                .setMediaType(mediaType)
+                                .build());
+            } else {
+                intent = new ActivityResultContracts.PickMultipleVisualMedia(maxItems).createIntent(activity, request);
+            }
+            startActivityForResult(intent, REQUEST_CODE_SYSTEM_PHOTO_PICKER);
+        } catch (Throwable e) {
+            pendingSystemPhotoPickerSingle = false;
+            pendingSystemPhotoPickerMaxItems = 0;
+            pendingSystemPhotoPickerCaption = null;
+            pendingSystemPhotoPickerAllowImages = false;
+            pendingSystemPhotoPickerAllowVideos = false;
+            FileLog.e(e);
+            showAttachmentError();
+        }
+    }
+
+    private void handleSystemPhotoPickerResult(int resultCode, Intent data) {
+        final boolean singleSelection = pendingSystemPhotoPickerSingle;
+        final int maxItems = Math.max(2, pendingSystemPhotoPickerMaxItems);
+        final CharSequence caption = pendingSystemPhotoPickerCaption;
+        final boolean allowImages = pendingSystemPhotoPickerAllowImages;
+        final boolean allowVideos = pendingSystemPhotoPickerAllowVideos;
+        pendingSystemPhotoPickerSingle = false;
+        pendingSystemPhotoPickerMaxItems = 0;
+        pendingSystemPhotoPickerCaption = null;
+        pendingSystemPhotoPickerAllowImages = false;
+        pendingSystemPhotoPickerAllowVideos = false;
+
+        if (resultCode != Activity.RESULT_OK) {
+            return;
+        }
+
+        final ArrayList<Uri> selectedUris = new ArrayList<>();
+        try {
+            if (singleSelection) {
+                Uri uri = new ActivityResultContracts.PickVisualMedia().parseResult(resultCode, data);
+                if (uri != null) {
+                    selectedUris.add(uri);
+                }
+            } else {
+                List<Uri> uris = new ActivityResultContracts.PickMultipleVisualMedia(maxItems).parseResult(resultCode, data);
+                if (uris != null) {
+                    selectedUris.addAll(uris.subList(0, Math.min(uris.size(), maxItems)));
+                }
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+            showAttachmentError();
+            return;
+        }
+        if (selectedUris.isEmpty()) {
+            return;
+        }
+        systemPhotoPickerProcessing = true;
+
+        Utilities.globalQueue.postRunnable(() -> {
+            ArrayList<SendMessagesHelper.SendingMediaInfo> media = new ArrayList<>(selectedUris.size());
+            for (Uri uri : selectedUris) {
+                try {
+                    String mimeType = ApplicationLoader.applicationContext.getContentResolver().getType(uri);
+                    String fileName = MediaController.getFileName(uri);
+                    boolean isVisualMimeType = mimeType != null && (mimeType.startsWith("image/") || mimeType.startsWith("video/"));
+                    String extension = isVisualMimeType ? android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) : null;
+                    if (!isVisualMimeType && fileName != null) {
+                        int dot = fileName.lastIndexOf('.');
+                        if (dot >= 0) {
+                            extension = fileName.substring(dot + 1);
+                        }
+                    }
+                    if (!isVisualMimeType && !TextUtils.isEmpty(extension)) {
+                        mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.toLowerCase(Locale.US));
+                    }
+                    boolean isVideo = mimeType != null && mimeType.startsWith("video/");
+                    if (isVideo ? !allowVideos : !allowImages) {
+                        continue;
+                    }
+                    if (!allowSendGifs() && "image/gif".equalsIgnoreCase(mimeType)) {
+                        continue;
+                    }
+                    if (TextUtils.isEmpty(extension)) {
+                        extension = isVideo ? "mp4" : "jpg";
+                    }
+                    String path = MediaController.copyFileToCache(uri, extension, FileLoader.DEFAULT_MAX_FILE_SIZE);
+                    if (TextUtils.isEmpty(path)) {
+                        continue;
+                    }
+                    SendMessagesHelper.SendingMediaInfo info = new SendMessagesHelper.SendingMediaInfo();
+                    info.path = path;
+                    info.isVideo = isVideo;
+                    media.add(info);
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+            AndroidUtilities.runOnUIThread(() -> {
+                systemPhotoPickerProcessing = false;
+                if (media.isEmpty()) {
+                    showAttachmentError();
+                } else if (chatAttachAlert != null && chatAttachAlert.isStickerMode) {
+                    chatAttachAlert.getPhotoLayout().openPickedPhotoForSticker(media);
+                } else if (!openPhotosEditor(media, caption)) {
+                    showAttachmentError();
+                }
+            });
+        });
+    }
+
     private void openAttachMenu() {
         if (getParentActivity() == null || chatActivityEnterView != null && !TextUtils.isEmpty(chatActivityEnterView.getSlowModeTimer())) {
             return;
@@ -14286,62 +14455,7 @@ public class ChatActivity extends BaseFragment implements
                 FileLog.e(e);
             }
         } else if (which == attach_gallery) {
-            final Activity activity = getParentActivity();
-            if (Build.VERSION.SDK_INT >= 33) {
-                if (activity.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
-                    try {
-                        getParentActivity().requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO}, BasePermissionsActivity.REQUEST_CODE_EXTERNAL_STORAGE);
-                    } catch (Throwable ignore) {}
-                    return;
-                }
-            } else if (Build.VERSION.SDK_INT >= 23) {
-                if (activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                    try {
-                        getParentActivity().requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, BasePermissionsActivity.REQUEST_CODE_EXTERNAL_STORAGE);
-                    } catch (Throwable ignore) {}
-                    return;
-                }
-            }
-            boolean allowGifs;
-            if (ChatObject.isChannel(currentChat) && currentChat.banned_rights != null && currentChat.banned_rights.send_gifs) {
-                allowGifs = false;
-            } else {
-                allowGifs = true;
-            }
-            PhotoAlbumPickerActivity fragment = new PhotoAlbumPickerActivity(PhotoAlbumPickerActivity.SELECT_TYPE_ALL, allowGifs, true, ChatActivity.this);
-            if (chatMode == MODE_WELCOME_MESSAGES) {
-                fragment.setMaxSelectedPhotos(1, true);
-            } else if (currentChat != null && !ChatObject.hasAdminRights(currentChat) && currentChat.slowmode_enabled) {
-                fragment.setMaxSelectedPhotos(10, true);
-            } else {
-                fragment.setMaxSelectedPhotos(editingMessageObject != null ? 1 : 0, editingMessageObject == null);
-            }
-            fragment.setDelegate(new PhotoAlbumPickerActivity.PhotoAlbumPickerActivityDelegate() {
-                @Override
-                public void didSelectPhotos(ArrayList<SendMessagesHelper.SendingMediaInfo> photos, boolean notify, int scheduleDate) {
-
-                }
-
-                @Override
-                public void startPhotoSelectActivity() {
-                    try {
-                        Intent videoPickerIntent = new Intent();
-                        videoPickerIntent.setType("video/*");
-                        videoPickerIntent.setAction(Intent.ACTION_GET_CONTENT);
-                        videoPickerIntent.putExtra(MediaStore.EXTRA_SIZE_LIMIT, FileLoader.DEFAULT_MAX_FILE_SIZE);
-
-                        Intent photoPickerIntent = new Intent(Intent.ACTION_PICK);
-                        photoPickerIntent.setType("image/*");
-                        Intent chooserIntent = Intent.createChooser(photoPickerIntent, null);
-                        chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{videoPickerIntent});
-
-                        startActivityForResult(chooserIntent, 1);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                }
-            });
-            presentFragment(fragment);
+            openSystemPhotoPickerFromAttachAlert();
         } else if (which == attach_video) {
             if (Build.VERSION.SDK_INT >= 23 && getParentActivity().checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 try {
@@ -20788,6 +20902,10 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_CODE_SYSTEM_PHOTO_PICKER) {
+            handleSystemPhotoPickerResult(resultCode, data);
+            return;
+        }
         if (resultCode == Activity.RESULT_OK) {
             if (requestCode == 0 || requestCode == 2) {
                 createChatAttachView();
@@ -20897,11 +21015,21 @@ public class ChatActivity extends BaseFragment implements
         if (currentPicturePath != null) {
             args.putString("path", currentPicturePath);
         }
+        args.putBoolean("systemPhotoPickerSingle", pendingSystemPhotoPickerSingle);
+        args.putInt("systemPhotoPickerMaxItems", pendingSystemPhotoPickerMaxItems);
+        args.putCharSequence("systemPhotoPickerCaption", pendingSystemPhotoPickerCaption);
+        args.putBoolean("systemPhotoPickerAllowImages", pendingSystemPhotoPickerAllowImages);
+        args.putBoolean("systemPhotoPickerAllowVideos", pendingSystemPhotoPickerAllowVideos);
     }
 
     @Override
     public void restoreSelfArgs(Bundle args) {
         currentPicturePath = args.getString("path");
+        pendingSystemPhotoPickerSingle = args.getBoolean("systemPhotoPickerSingle");
+        pendingSystemPhotoPickerMaxItems = args.getInt("systemPhotoPickerMaxItems");
+        pendingSystemPhotoPickerCaption = args.getCharSequence("systemPhotoPickerCaption");
+        pendingSystemPhotoPickerAllowImages = args.getBoolean("systemPhotoPickerAllowImages");
+        pendingSystemPhotoPickerAllowVideos = args.getBoolean("systemPhotoPickerAllowVideos");
     }
 
     private boolean isSkeletonVisible() {

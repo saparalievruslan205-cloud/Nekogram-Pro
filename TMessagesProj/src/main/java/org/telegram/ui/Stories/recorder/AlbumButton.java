@@ -8,6 +8,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.text.Layout;
 import android.text.StaticLayout;
@@ -28,6 +29,11 @@ import org.telegram.ui.Components.CombinedDrawable;
 public class AlbumButton extends View {
     private final ImageReceiver imageReceiver = new ImageReceiver(this);
     private final CharSequence title, subtitle;
+    private final MediaController.PhotoEntry cover;
+    private final Drawable noGalleryDrawable;
+    private final String coverFilter;
+    private final Rect visibleRect = new Rect();
+    private boolean coverRequested;
 
     private final TextPaint namePaintLayout = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private StaticLayout nameLayout;
@@ -57,23 +63,31 @@ public class AlbumButton extends View {
         imageReceiver.setRoundRadius(dp(4));
         final Drawable noPhotosIcon = context.getResources().getDrawable(R.drawable.msg_media_gallery).mutate();
         noPhotosIcon.setColorFilter(new PorterDuffColorFilter(0x4dFFFFFF, PorterDuff.Mode.MULTIPLY));
-        final CombinedDrawable noGalleryDrawable = new CombinedDrawable(Theme.createRoundRectDrawable(dp(6), 0xFF2E2E2F), noPhotosIcon);
-        noGalleryDrawable.setFullsize(false);
-        noGalleryDrawable.setIconSize(dp(18), dp(18));
-        final String filter = imageSize + "_" + imageSize;
-        if (cover != null && cover.thumbPath != null) {
-            imageReceiver.setImage(ImageLocation.getForPath(cover.thumbPath), filter, null, null, noGalleryDrawable, null, 0);
-        } else if (cover != null && cover.path != null) {
-            if (cover.isVideo) {
-                imageReceiver.setImage(ImageLocation.getForPath("vthumb://" + cover.imageId + ":" + cover.path), filter, null, null, noGalleryDrawable, null, 0);
-            } else {
-                imageReceiver.setImage(ImageLocation.getForPath("thumb://" + cover.imageId + ":" + cover.path), filter, null, null, noGalleryDrawable, null, 0);
-            }
-        } else {
-            imageReceiver.setImageBitmap(noGalleryDrawable);
-        }
+        final CombinedDrawable placeholder = new CombinedDrawable(Theme.createRoundRectDrawable(dp(6), 0xFF2E2E2F), noPhotosIcon);
+        placeholder.setFullsize(false);
+        placeholder.setIconSize(dp(18), dp(18));
+        this.noGalleryDrawable = placeholder;
+        this.cover = cover;
+        coverFilter = imageSize + "_" + imageSize;
+        imageReceiver.setImageBitmap(noGalleryDrawable);
 
         setContentDescription(title + (count > 0 ? " " + LocaleController.formatPluralStringComma("Media", count) : ""));
+    }
+
+    private void requestCoverIfVisible() {
+        if (coverRequested || !getGlobalVisibleRect(visibleRect)) {
+            return;
+        }
+        coverRequested = true;
+        if (cover != null && cover.thumbPath != null) {
+            imageReceiver.setImage(ImageLocation.getForPath(cover.thumbPath), coverFilter, null, null, noGalleryDrawable, null, 0);
+        } else if (cover != null && cover.path != null) {
+            if (cover.isVideo) {
+                imageReceiver.setImage(ImageLocation.getForPath("vthumb://" + cover.imageId + ":" + cover.path), coverFilter, null, null, noGalleryDrawable, null, 0);
+            } else {
+                imageReceiver.setImage(ImageLocation.getForPath("thumb://" + cover.imageId + ":" + cover.path), coverFilter, null, null, noGalleryDrawable, null, 0);
+            }
+        }
     }
 
     @Override
@@ -117,6 +131,7 @@ public class AlbumButton extends View {
 
     @Override
     protected void dispatchDraw(Canvas canvas) {
+        requestCoverIfVisible();
         float x = getPaddingLeft();
         imageReceiver.setImageCoords(x, (getMeasuredHeight() - dp(imageSize)) / 2f, dp(imageSize), dp(imageSize));
         imageReceiver.draw(canvas);

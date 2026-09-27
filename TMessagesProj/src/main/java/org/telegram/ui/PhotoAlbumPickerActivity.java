@@ -11,6 +11,7 @@ package org.telegram.ui;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Outline;
 import android.graphics.Paint;
@@ -18,7 +19,9 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.MediaStore;
 import android.text.InputFilter;
 import android.text.TextPaint;
 import android.util.TypedValue;
@@ -38,12 +41,16 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.graphics.ColorUtils;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.FileLoader;
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaController;
 import org.telegram.messenger.MessagesController;
@@ -52,6 +59,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
+import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
@@ -73,6 +81,7 @@ import org.telegram.ui.Components.SizeNotifierFrameLayout;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 public class PhotoAlbumPickerActivity extends BaseFragment implements NotificationCenter.NotificationCenterDelegate {
 
@@ -102,6 +111,10 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
     private ChatActivity chatActivity;
     private int maxSelectedPhotos;
     private boolean allowOrder = true;
+    private boolean systemPhotoPickerStarted;
+    private boolean systemPhotoPickerSingle;
+    private int systemPhotoPickerMaxItems;
+    private static final int REQUEST_CODE_SYSTEM_PHOTO_PICKER = 220;
 
     private ActionBarPopupWindow sendPopupWindow;
     private ActionBarPopupWindow.ActionBarPopupWindowLayout sendPopupLayout;
@@ -137,14 +150,8 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
 
     @Override
     public boolean onFragmentCreate() {
-        if (selectPhotoType == SELECT_TYPE_AVATAR || selectPhotoType == SELECT_TYPE_WALLPAPER || selectPhotoType == SELECT_TYPE_QR || !allowSearchImages) {
-            albumsSorted = MediaController.allPhotoAlbums;
-        } else {
-            albumsSorted = MediaController.allMediaAlbums;
-        }
-        loading = albumsSorted == null;
-        MediaController.loadGalleryPhotosAlbums(classGuid);
-        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.albumsDidLoad);
+        albumsSorted = null;
+        loading = false;
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.closeChats);
         return super.onFragmentCreate();
     }
@@ -154,7 +161,6 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
         if (commentTextView != null) {
             commentTextView.onDestroy();
         }
-        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.closeChats);
         super.onFragmentDestroy();
     }
@@ -565,6 +571,10 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
             listView.setEmptyView(emptyView);
         }
 
+        if (!systemPhotoPickerStarted) {
+            systemPhotoPickerStarted = true;
+            AndroidUtilities.runOnUIThread(this::launchSystemPhotoPicker, 100);
+        }
         return fragmentView;
     }
 
@@ -721,6 +731,130 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
             MediaController.SearchImage searchImage = (MediaController.SearchImage) entry;
             searchImage.caption = commentTextView.getText().toString();
         }
+    }
+
+    private void launchSystemPhotoPicker() {
+        if (getParentActivity() == null) {
+            finishFragment(false);
+            return;
+        }
+        int requestedMaxItems = maxSelectedPhotos > 0 ? maxSelectedPhotos : selectPhotoType == SELECT_TYPE_ALL ? 150 : 1;
+        int maxItems = requestedMaxItems == 1 ? 1 : Math.min(requestedMaxItems, 150);
+        if (Build.VERSION.SDK_INT >= 33 && maxItems > 1) {
+            maxItems = Math.min(maxItems, MediaStore.getPickImagesMaxLimit());
+        }
+        systemPhotoPickerSingle = maxItems <= 1;
+        systemPhotoPickerMaxItems = Math.max(2, maxItems);
+
+        boolean allowVideos = selectPhotoType == SELECT_TYPE_ALL || selectPhotoType == SELECT_TYPE_AVATAR_VIDEO;
+        ActivityResultContracts.PickVisualMedia.VisualMediaType mediaType = allowVideos
+                ? ActivityResultContracts.PickVisualMedia.ImageAndVideo.INSTANCE
+                : ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE;
+        try {
+            PickVisualMediaRequest.Builder requestBuilder = new PickVisualMediaRequest.Builder().setMediaType(mediaType);
+            Intent intent;
+            if (systemPhotoPickerSingle) {
+                intent = new ActivityResultContracts.PickVisualMedia().createIntent(getParentActivity(), requestBuilder.build());
+            } else {
+                PickVisualMediaRequest request = requestBuilder
+                        .setMaxItems(maxItems)
+                        .setOrderedSelection(allowOrder)
+                        .build();
+                intent = new ActivityResultContracts.PickMultipleVisualMedia(maxItems).createIntent(getParentActivity(), request);
+            }
+            startActivityForResult(intent, REQUEST_CODE_SYSTEM_PHOTO_PICKER);
+        } catch (Throwable e) {
+            FileLog.e(e);
+            finishFragment(false);
+        }
+    }
+
+    @Override
+    public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQUEST_CODE_SYSTEM_PHOTO_PICKER) {
+            super.onActivityResultFragment(requestCode, resultCode, data);
+            return;
+        }
+        if (resultCode != Activity.RESULT_OK) {
+            finishFragment(false);
+            return;
+        }
+
+        ArrayList<Uri> selectedUris = new ArrayList<>();
+        try {
+            if (systemPhotoPickerSingle) {
+                Uri uri = new ActivityResultContracts.PickVisualMedia().parseResult(resultCode, data);
+                if (uri != null) {
+                    selectedUris.add(uri);
+                }
+            } else {
+                List<Uri> uris = new ActivityResultContracts.PickMultipleVisualMedia(systemPhotoPickerMaxItems).parseResult(resultCode, data);
+                if (uris != null) {
+                    selectedUris.addAll(uris.subList(0, Math.min(uris.size(), systemPhotoPickerMaxItems)));
+                }
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+            finishFragment(false);
+            return;
+        }
+        if (selectedUris.isEmpty()) {
+            finishFragment(false);
+            return;
+        }
+
+        final CharSequence selectedCaption = allowCaption && commentTextView != null ? commentTextView.getText() : null;
+        Utilities.globalQueue.postRunnable(() -> {
+            ArrayList<SendMessagesHelper.SendingMediaInfo> media = new ArrayList<>(selectedUris.size());
+            for (Uri uri : selectedUris) {
+                try {
+                    String mimeType = ApplicationLoader.applicationContext.getContentResolver().getType(uri);
+                    String fileName = MediaController.getFileName(uri);
+                    boolean isVisualMimeType = mimeType != null && (mimeType.startsWith("image/") || mimeType.startsWith("video/"));
+                    String extension = isVisualMimeType ? android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) : null;
+                    if (!isVisualMimeType && fileName != null) {
+                        int dot = fileName.lastIndexOf('.');
+                        if (dot >= 0) {
+                            extension = fileName.substring(dot + 1);
+                        }
+                    }
+                    if (!isVisualMimeType && !android.text.TextUtils.isEmpty(extension)) {
+                        mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.toLowerCase(java.util.Locale.US));
+                    }
+                    boolean isVideo = mimeType != null && mimeType.startsWith("video/");
+                    if (isVideo && selectPhotoType != SELECT_TYPE_ALL && selectPhotoType != SELECT_TYPE_AVATAR_VIDEO) {
+                        continue;
+                    }
+                    if (!allowGifs && "image/gif".equalsIgnoreCase(mimeType)) {
+                        continue;
+                    }
+                    if (android.text.TextUtils.isEmpty(extension)) {
+                        extension = isVideo ? "mp4" : "jpg";
+                    }
+                    String path = MediaController.copyFileToCache(uri, extension, FileLoader.DEFAULT_MAX_FILE_SIZE);
+                    if (android.text.TextUtils.isEmpty(path)) {
+                        continue;
+                    }
+                    SendMessagesHelper.SendingMediaInfo info = new SendMessagesHelper.SendingMediaInfo();
+                    info.path = path;
+                    info.isVideo = isVideo;
+                    media.add(info);
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+            AndroidUtilities.runOnUIThread(() -> {
+                finishFragment(false);
+                if (media.isEmpty()) {
+                    return;
+                }
+                if (chatActivity != null && selectPhotoType == SELECT_TYPE_ALL) {
+                    chatActivity.openPhotosEditor(media, selectedCaption);
+                } else if (delegate != null) {
+                    delegate.didSelectPhotos(media, false, 0);
+                }
+            });
+        });
     }
 
     private void fixLayoutInternal() {

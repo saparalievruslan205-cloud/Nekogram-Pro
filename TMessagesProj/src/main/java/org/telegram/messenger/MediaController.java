@@ -1025,6 +1025,11 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     private SparseArray<MessageObject> voiceMessagesPlaylistMap;
 
     private static Runnable refreshGalleryRunnable;
+    private static final Object galleryLoadLock = new Object();
+    private static final ArrayList<Integer> pendingGalleryGuids = new ArrayList<>();
+    private static final int MAX_GALLERY_ENTRIES_PER_TYPE = 1000;
+    private static boolean galleryLoadInProgress;
+    private static boolean galleryReloadPending;
     public static AlbumEntry allMediaAlbumEntry;
     public static AlbumEntry allPhotosAlbumEntry;
     public static AlbumEntry allVideosAlbumEntry;
@@ -1269,7 +1274,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     return;
                 }
                 refreshGalleryRunnable = null;
-                loadGalleryPhotosAlbums(0);
+                reloadGalleryPhotosAlbums(0);
             }, 2000);
         }
 
@@ -1296,33 +1301,28 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             }
             AndroidUtilities.runOnUIThread(refreshGalleryRunnable = () -> {
                 refreshGalleryRunnable = null;
-                loadGalleryPhotosAlbums(0);
+                reloadGalleryPhotosAlbums(0);
             }, 2000);
         }
     }
 
     public static void checkGallery() {
-        if (Build.VERSION.SDK_INT < 24 || allPhotosAlbumEntry == null) {
+        if (Build.VERSION.SDK_INT < 24 || allMediaAlbumEntry == null) {
             return;
         }
-        final int prevSize = allPhotosAlbumEntry.photos.size();
+        final int prevSize = allMediaAlbumEntry.photos.size();
+        final String selection = MediaStore.MediaColumns.DATA + " IS NOT NULL AND " + MediaStore.MediaColumns.DATA + " != ''";
         Utilities.globalQueue.postRunnable(() -> {
-            int count = 0;
+            int imageCount = 0;
+            int videoCount = 0;
             Cursor cursor = null;
             try {
                 final Context context = ApplicationLoader.applicationContext;
-                if (
-                    Build.VERSION.SDK_INT >= 33 && (
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    ) ||
-                    context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    cursor = MediaStore.Images.Media.query(context.getContentResolver(), MediaStore.Images.Media.EXTERNAL_CONTENT_URI, new String[]{"COUNT(_id)"}, null, null, null);
+                if (hasGalleryPermission(context)) {
+                    cursor = MediaStore.Images.Media.query(context.getContentResolver(), MediaStore.Images.Media.EXTERNAL_CONTENT_URI, new String[]{"COUNT(_id)"}, selection, null, null);
                     if (cursor != null) {
                         if (cursor.moveToNext()) {
-                            count += cursor.getInt(0);
+                            imageCount = cursor.getInt(0);
                         }
                     }
                 }
@@ -1335,18 +1335,11 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             }
             try {
                 final Context context = ApplicationLoader.applicationContext;
-                if (
-                    Build.VERSION.SDK_INT >= 33 && (
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    ) ||
-                    context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    cursor = MediaStore.Images.Media.query(context.getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI, new String[]{"COUNT(_id)"}, null, null, null);
+                if (hasGalleryPermission(context)) {
+                    cursor = MediaStore.Images.Media.query(context.getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI, new String[]{"COUNT(_id)"}, selection, null, null);
                     if (cursor != null) {
                         if (cursor.moveToNext()) {
-                            count += cursor.getInt(0);
+                            videoCount = cursor.getInt(0);
                         }
                     }
                 }
@@ -1357,14 +1350,29 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     cursor.close();
                 }
             }
-            if (prevSize != count) {
+            int expectedCount = Math.min(imageCount, MAX_GALLERY_ENTRIES_PER_TYPE) + Math.min(videoCount, MAX_GALLERY_ENTRIES_PER_TYPE);
+            if (prevSize != expectedCount) {
                 if (refreshGalleryRunnable != null) {
                     AndroidUtilities.cancelRunOnUIThread(refreshGalleryRunnable);
                     refreshGalleryRunnable = null;
                 }
-                loadGalleryPhotosAlbums(0);
+                reloadGalleryPhotosAlbums(0);
             }
         }, 2000);
+    }
+
+    private static boolean hasGalleryPermission(Context context) {
+        if (Build.VERSION.SDK_INT < 23) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT >= 34 && context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            return context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                    context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED;
+        }
+        return context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
     }
 
 
@@ -5760,6 +5768,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     }
 
     private static Uri saveFileInternal(int type, File sourceFile, String filename) {
+        Uri dstUri = null;
         try {
             int selectedType = type;
             ContentValues contentValues = new ContentValues();
@@ -5814,16 +5823,30 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
 
             contentValues.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
 
-            Uri dstUri = ApplicationLoader.applicationContext.getContentResolver().insert(uriToInsert, contentValues);
+            dstUri = ApplicationLoader.applicationContext.getContentResolver().insert(uriToInsert, contentValues);
             if (dstUri != null) {
-                FileInputStream fileInputStream = new FileInputStream(sourceFile);
-                OutputStream outputStream = ApplicationLoader.applicationContext.getContentResolver().openOutputStream(dstUri);
-                AndroidUtilities.copyFile(fileInputStream, outputStream);
-                fileInputStream.close();
+                try (FileInputStream inputStream = new FileInputStream(sourceFile);
+                     OutputStream outputStream = ApplicationLoader.applicationContext.getContentResolver().openOutputStream(dstUri)) {
+                    if (outputStream == null) {
+                        throw new IOException("Could not open MediaStore output stream");
+                    }
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = inputStream.read(buffer)) != -1) {
+                        outputStream.write(buffer, 0, read);
+                    }
+                }
             }
             return dstUri;
         } catch (Exception e) {
             FileLog.e(e);
+            if (dstUri != null) {
+                try {
+                    ApplicationLoader.applicationContext.getContentResolver().delete(dstUri, null, null);
+                } catch (Exception cleanupError) {
+                    FileLog.e(cleanupError);
+                }
+            }
             return null;
         }
     }
@@ -5991,8 +6014,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     public static String copyFileToCache(Uri uri, String ext, long sizeLimit) {
         InputStream inputStream = null;
         FileOutputStream output = null;
-        int totalLen = 0;
+        long totalLen = 0;
         File f = null;
+        boolean completed = false;
         try {
             String name = FileLoader.fixFileName(getFileName(uri));
             if (name == null) {
@@ -6043,6 +6067,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     return null;
                 }
             }
+            completed = true;
             return f.getAbsolutePath();
         } catch (Exception e) {
             FileLog.e(e);
@@ -6061,7 +6086,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             } catch (Exception e2) {
                 FileLog.e(e2);
             }
-            if (sizeLimit > 0 && totalLen > sizeLimit) {
+            if (!completed && output != null && f != null) {
                 f.delete();
             }
         }
@@ -6069,6 +6094,36 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     }
 
     public static void loadGalleryPhotosAlbums(final int guid) {
+        synchronized (galleryLoadLock) {
+            if (allMediaAlbumEntry != null) {
+                return;
+            }
+            if (!pendingGalleryGuids.contains(guid)) {
+                pendingGalleryGuids.add(guid);
+            }
+            if (galleryLoadInProgress) {
+                return;
+            }
+            galleryLoadInProgress = true;
+        }
+        startGalleryPhotosAlbumsLoad(guid);
+    }
+
+    private static void reloadGalleryPhotosAlbums(final int guid) {
+        synchronized (galleryLoadLock) {
+            if (!pendingGalleryGuids.contains(guid)) {
+                pendingGalleryGuids.add(guid);
+            }
+            if (galleryLoadInProgress) {
+                galleryReloadPending = true;
+                return;
+            }
+            galleryLoadInProgress = true;
+        }
+        startGalleryPhotosAlbumsLoad(guid);
+    }
+
+    private static void startGalleryPhotosAlbumsLoad(final int guid) {
         Thread thread = new Thread(() -> {
             final ArrayList<AlbumEntry> mediaAlbumsSorted = new ArrayList<>();
             final ArrayList<AlbumEntry> photoAlbumsSorted = new ArrayList<>();
@@ -6089,15 +6144,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             Cursor cursor = null;
             try {
                 final Context context = ApplicationLoader.applicationContext;
-                if (
-                    Build.VERSION.SDK_INT < 23 ||
-                    Build.VERSION.SDK_INT < 33 && context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ||
-                    Build.VERSION.SDK_INT >= 33 && (
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    )
-                ) {
+                if (hasGalleryPermission(context)) {
                     cursor = MediaStore.Images.Media.query(context.getContentResolver(), MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projectionPhotos, null, null, (Build.VERSION.SDK_INT > 28 ? MediaStore.Images.Media.DATE_MODIFIED : MediaStore.Images.Media.DATE_TAKEN) + " DESC");
                     if (cursor != null) {
                         int imageIdColumn = cursor.getColumnIndex(MediaStore.Images.Media._ID);
@@ -6114,6 +6161,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                             String path = cursor.getString(dataColumn);
                             if (TextUtils.isEmpty(path)) {
                                 continue;
+                            }
+                            if (allPhotosAlbum != null && allPhotosAlbum.photos.size() >= MAX_GALLERY_ENTRIES_PER_TYPE) {
+                                break;
                             }
 
                             int imageId = cursor.getInt(imageIdColumn);
@@ -6185,15 +6235,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             try {
 
                 final Context context = ApplicationLoader.applicationContext;
-                if (
-                    Build.VERSION.SDK_INT < 23 ||
-                    Build.VERSION.SDK_INT < 33 && context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ||
-                    Build.VERSION.SDK_INT >= 33 && (
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                        context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    )
-                ) {
+                if (hasGalleryPermission(context)) {
                     cursor = MediaStore.Images.Media.query(ApplicationLoader.applicationContext.getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projectionVideo, null, null, (Build.VERSION.SDK_INT > 28 ? MediaStore.Video.Media.DATE_MODIFIED : MediaStore.Video.Media.DATE_TAKEN) + " DESC");
                     if (cursor != null) {
                         int imageIdColumn = cursor.getColumnIndex(MediaStore.Video.Media._ID);
@@ -6211,6 +6253,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                             String path = cursor.getString(dataColumn);
                             if (TextUtils.isEmpty(path)) {
                                 continue;
+                            }
+                            if (allVideosAlbum != null && allVideosAlbum.photos.size() >= MAX_GALLERY_ENTRIES_PER_TYPE) {
+                                break;
                             }
 
                             int imageId = cursor.getInt(imageIdColumn);
@@ -6303,7 +6348,31 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             allPhotosAlbumEntry = allPhotosAlbumFinal;
             allMediaAlbumEntry = allMediaAlbumFinal;
             allVideosAlbumEntry = allVideosAlbumFinal;
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, guid, mediaAlbumsSorted, photoAlbumsSorted, cameraAlbumIdFinal);
+            ArrayList<Integer> notificationGuids;
+            boolean reloadAfterCurrent;
+            synchronized (galleryLoadLock) {
+                if (!pendingGalleryGuids.contains(guid)) {
+                    pendingGalleryGuids.add(guid);
+                }
+                notificationGuids = new ArrayList<>(pendingGalleryGuids);
+                reloadAfterCurrent = galleryReloadPending;
+                galleryReloadPending = false;
+                if (reloadAfterCurrent) {
+                    if (!pendingGalleryGuids.contains(0)) {
+                        pendingGalleryGuids.add(0);
+                    }
+                } else {
+                    pendingGalleryGuids.clear();
+                    galleryLoadInProgress = false;
+                }
+            }
+            PagedGalleryIndex.onGalleryChanged(ApplicationLoader.applicationContext);
+            for (int notificationGuid : notificationGuids) {
+                NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, notificationGuid, mediaAlbumsSorted, photoAlbumsSorted, cameraAlbumIdFinal);
+            }
+            if (reloadAfterCurrent) {
+                startGalleryPhotosAlbumsLoad(0);
+            }
         }, delay);
     }
 

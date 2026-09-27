@@ -362,6 +362,7 @@ public class ApplicationLoader extends Application {
         applicationHandler = new Handler(applicationContext.getMainLooper());
 
         AndroidUtilities.runOnUIThread(ApplicationLoader::startPushService);
+        AndroidUtilities.runOnUIThread(() -> PagedGalleryIndex.warmUp(applicationContext), 2000);
         countDownLatch.countDown();
 
         LauncherIconController.tryFixLauncherIconIfNeeded();
