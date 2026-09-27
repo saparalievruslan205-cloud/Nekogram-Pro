@@ -5,7 +5,10 @@ import android.content.Context;
 import android.view.ViewGroup;
 
 import org.telegram.messenger.regular.BuildConfig;
+import org.telegram.messenger.regular.R;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.messenger.browser.Browser;
+import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.Components.UpdateAppAlertDialog;
 import org.telegram.ui.Components.UpdateLayout;
 import org.telegram.ui.IUpdateLayout;
@@ -13,6 +16,8 @@ import org.telegram.ui.IUpdateLayout;
 import tw.nekomimi.nekogram.Extra;
 
 public class ApplicationLoaderImpl extends ApplicationLoader {
+    private final ProUpdateManager proUpdates = new ProUpdateManager();
+
     @Override
     protected String onGetApplicationId() {
         return BuildConfig.APPLICATION_ID;
@@ -30,6 +35,41 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         } catch (Exception e) {
             FileLog.e(e);
         }
+        return true;
+    }
+
+    @Override
+    public boolean isCustomUpdate() {
+        return "tw.nekomimi.nekogram.beta".equals(BuildConfig.APPLICATION_ID);
+    }
+
+    @Override
+    public void checkUpdate(boolean force, Runnable whenDone) {
+        proUpdates.check(force, whenDone);
+    }
+
+    @Override
+    public BetaUpdate getUpdate() {
+        return proUpdates.getUpdate();
+    }
+
+    @Override
+    public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
+        if (!(update instanceof ProUpdateManager.ProUpdate)) {
+            return false;
+        }
+        ProUpdateManager.ProUpdate proUpdate = (ProUpdateManager.ProUpdate) update;
+        String message = context.getString(R.string.ProUpdateAvailable, update.version);
+        if (update.changelog != null && !update.changelog.isEmpty()) {
+            message += "\n\n" + update.changelog;
+        }
+        new AlertDialog.Builder(context)
+                .setTitle(context.getString(R.string.Nekogram))
+                .setMessage(message)
+                .setPositiveButton(context.getString(R.string.ProUpdateDownload),
+                        (dialog, which) -> Browser.openUrlInSystemBrowser(context, proUpdate.downloadUrl))
+                .setNegativeButton(context.getString(R.string.ProUpdateLater), null)
+                .show();
         return true;
     }
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ProUpdateAvailable">Nekogram Pro %1$s is available.</string>
+    <string name="ProUpdateDownload">Download update</string>
+    <string name="ProUpdateLater">Later</string>
+</resources>

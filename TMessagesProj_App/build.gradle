@@ -110,8 +110,10 @@ androidComponents {
             def abi = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
             def abiName = abi ?: "universal"
             def baseVersionCode = output.versionCode.get()
-            output.outputFileName.set("Nekogram-${output.versionName.get()}-${baseVersionCode}-${abiName}.apk")
-            output.versionCode.set(baseVersionCode * 10)
+            def isPro = variant.buildType == "debug"
+            def versionCode = isPro ? baseVersionCode * 1000 + Integer.parseInt(PRO_REVISION) : baseVersionCode * 10
+            output.outputFileName.set("${isPro ? 'Nekogram-Pro' : 'Nekogram'}-${output.versionName.get()}-${versionCode}-${abiName}.apk")
+            output.versionCode.set(versionCode)
         }
     }
 }
