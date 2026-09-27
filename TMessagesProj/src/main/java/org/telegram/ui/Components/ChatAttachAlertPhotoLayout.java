@@ -2711,9 +2711,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     }
 
     public void loadGalleryPhotos() {
-        if (parentAlert.baseFragment instanceof ChatActivity && parentAlert.avatarPicker == 0 && !parentAlert.storyMediaPicker && !parentAlert.isStickerMode && !parentAlert.isPollAttach && !parentAlert.isPhotoPicker) {
-            loadPagedGalleryIndex();
-        }
+        loadPagedGalleryIndex();
         MediaController.AlbumEntry albumEntry;
         if (shouldLoadAllMedia()) {
             albumEntry = MediaController.allMediaAlbumEntry;
@@ -2743,15 +2741,19 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                 if (index == null) {
                     return;
                 }
-                if (MediaController.allMediaAlbumEntry != null &&
-                        index.getAllMedia().size() < MediaController.allMediaAlbumEntry.photos.size()) {
+                MediaController.AlbumEntry legacyAlbum = shouldLoadAllMedia()
+                        ? MediaController.allMediaAlbumEntry : MediaController.allPhotosAlbumEntry;
+                PagedGalleryIndex.Album indexedAlbum = shouldLoadAllMedia()
+                        ? index.getAllMedia() : index.getAllPhotos();
+                if (legacyAlbum != null && indexedAlbum.size() < legacyAlbum.photos.size()) {
                     return;
                 }
                 boolean wasAllPhotos = pagedGalleryIndex != null && selectedPagedAlbum == pagedGalleryIndex.getAllPhotos();
                 boolean wasAllVideos = pagedGalleryIndex != null && selectedPagedAlbum == pagedGalleryIndex.getAllVideos();
                 int previousBucket = selectedPagedAlbum == null ? 0 : selectedPagedAlbum.bucketId;
                 pagedGalleryIndex = index;
-                dropDownPagedAlbums = index.getAlbums();
+                boolean allMedia = shouldLoadAllMedia();
+                dropDownPagedAlbums = allMedia ? index.getAlbums() : index.getPhotoAlbums();
                 pagedAlbumEntries = new ArrayList<>(dropDownPagedAlbums.size());
                 for (PagedGalleryIndex.Album album : dropDownPagedAlbums) {
                     MediaController.AlbumEntry entry = new MediaController.AlbumEntry(album.bucketId, album.name, album.coverPhoto);
@@ -2759,7 +2761,9 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                     pagedAlbumEntries.add(entry);
                 }
                 galleryAlbumEntry = pagedAlbumEntries.get(0);
-                selectedPagedAlbum = wasAllPhotos ? index.getAllPhotos() : wasAllVideos ? index.getAllVideos() : index.findAlbum(previousBucket, false);
+                selectedPagedAlbum = !allMedia ? index.findPhotoAlbum(previousBucket)
+                        : wasAllPhotos ? index.getAllPhotos() : wasAllVideos ? index.getAllVideos()
+                        : index.findAlbum(previousBucket, false);
                 int selectedIndex = dropDownPagedAlbums.indexOf(selectedPagedAlbum);
                 selectedAlbumEntry = pagedAlbumEntries.get(Math.max(0, selectedIndex));
                 if (adapter != null) {
@@ -3979,7 +3983,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         }
         if (pagedGalleryIndex != null && pagedAlbumEntries != null) {
             galleryAlbumEntry = pagedAlbumEntries.get(0);
-            selectedPagedAlbum = pagedGalleryIndex.getAllMedia();
+            selectedPagedAlbum = dropDownPagedAlbums.get(0);
         }
         if (Build.VERSION.SDK_INT >= 23) {
             noGalleryPermissions = isNoGalleryPermissions();

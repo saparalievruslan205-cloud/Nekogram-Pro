@@ -207,6 +207,7 @@ public final class PagedGalleryIndex {
     private final int[] ids;
     private final long[] dates;
     private final ArrayList<Album> albums;
+    private final ArrayList<Album> photoAlbums;
     private final Album allMedia;
     private final Album allPhotos;
     private final Album allVideos;
@@ -220,11 +221,13 @@ public final class PagedGalleryIndex {
     private final HashSet<Integer> unavailable = new HashSet<>();
     private boolean closed;
 
-    private PagedGalleryIndex(Context context, int[] ids, long[] dates, ArrayList<Album> albums, Album allMedia, Album allPhotos, Album allVideos) {
+    private PagedGalleryIndex(Context context, int[] ids, long[] dates, ArrayList<Album> albums,
+                              ArrayList<Album> photoAlbums, Album allMedia, Album allPhotos, Album allVideos) {
         this.context = context.getApplicationContext();
         this.ids = ids;
         this.dates = dates;
         this.albums = albums;
+        this.photoAlbums = photoAlbums;
         this.allMedia = allMedia;
         this.allPhotos = allPhotos;
         this.allVideos = allVideos;
@@ -254,7 +257,9 @@ public final class PagedGalleryIndex {
         IntList photoPositions = new IntList();
         IntList videoPositions = new IntList();
         SparseArray<Album> bucketAlbums = new SparseArray<>();
+        SparseArray<Album> photoBucketAlbums = new SparseArray<>();
         ArrayList<Album> albums = new ArrayList<>();
+        ArrayList<Album> photoAlbums = new ArrayList<>();
         IntList allPositions = new IntList();
         Album allMedia = new Album(0, LocaleController.getString(R.string.AllMedia), false, true, allPositions);
         Album allPhotos = new Album(0, LocaleController.getString(R.string.AllPhotos), false, false, photoPositions);
@@ -316,6 +321,17 @@ public final class PagedGalleryIndex {
                     albums.add(bucket);
                 }
                 bucket.positions.add(position);
+                if (type == IMAGE) {
+                    Album photoBucket = photoBucketAlbums.get(bucketId);
+                    if (photoBucket == null) {
+                        photoBucket = new Album(bucketId, bucket.name, false, false, new IntList());
+                        photoBucket.coverPhoto = new MediaController.PhotoEntry(bucketId, id, date,
+                                cursor.getString(5), 0, 0, false, 0, 0, 0);
+                        photoBucketAlbums.put(bucketId, photoBucket);
+                        photoAlbums.add(photoBucket);
+                    }
+                    photoBucket.positions.add(position);
+                }
             }
         } finally {
             if (cursor != null) {
@@ -339,11 +355,16 @@ public final class PagedGalleryIndex {
         if (videoPositions.size > 0) {
             albums.add(photoPositions.size > 0 ? 2 : 1, allVideos);
         }
-        return new PagedGalleryIndex(context, ids, dates, albums, allMedia, allPhotos, allVideos);
+        photoAlbums.add(0, allPhotos);
+        return new PagedGalleryIndex(context, ids, dates, albums, photoAlbums, allMedia, allPhotos, allVideos);
     }
 
     public ArrayList<Album> getAlbums() {
         return albums;
+    }
+
+    public ArrayList<Album> getPhotoAlbums() {
+        return photoAlbums;
     }
 
     public Album getAllMedia() {
@@ -365,6 +386,17 @@ public final class PagedGalleryIndex {
             }
         }
         return allMedia;
+    }
+
+    public Album findPhotoAlbum(int bucketId) {
+        if (bucketId != 0) {
+            for (Album album : photoAlbums) {
+                if (album.bucketId == bucketId) {
+                    return album;
+                }
+            }
+        }
+        return allPhotos;
     }
 
     public long getDate(Album album, int position) {
