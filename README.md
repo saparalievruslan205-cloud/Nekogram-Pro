@@ -1,4 +1,11 @@
 # 🐾 Nekogram
+
+## Nekogram Pro fork
+
+This fork contains the large-gallery optimizations and an independent update channel for the separately installed `tw.nekomimi.nekogram.beta` app, displayed as **Nekogram Pro**. Download its APK from [this fork's releases](https://github.com/saparalievruslan205-cloud/Nekogram-Pro/releases/latest). The links below belong to the original Nekogram project.
+
+The release and signing convention is documented in [PRO_RELEASE.md](PRO_RELEASE.md).
+
 [![Crowdin](https://badges.crowdin.net/e/a094217ac83905ae1625526d59bba8dc/localized.svg)](https://neko.crowdin.com/nekogram)  
 Nekogram is a third-party Telegram client with not many but useful modifications.
 
