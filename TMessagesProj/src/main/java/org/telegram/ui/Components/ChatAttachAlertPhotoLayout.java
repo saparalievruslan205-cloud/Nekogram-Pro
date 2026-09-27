@@ -821,6 +821,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         this.forceDarkTheme = forceDarkTheme;
         this.needCamera = needCamera;
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.albumsDidLoad);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.cameraInitied);
         FrameLayout container = alert.getContainer();
         showAvatarConstructor = parentAlert.avatarPicker != 0;
@@ -3860,6 +3861,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     public void onDestroy() {
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.cameraInitied);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.albumsDidLoad);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
         ++galleryIndexGeneration;
         if (pendingGalleryRefresh != null) {
             AndroidUtilities.cancelRunOnUIThread(pendingGalleryRefresh);
@@ -4485,6 +4487,12 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.pagedGalleryIndexDidLoad) {
+            if (pagedGalleryIndex != null && !parentAlert.destroyed) {
+                loadPagedGalleryIndex(true);
+            }
+            return;
+        }
         if (id == NotificationCenter.albumsDidLoad) {
             if (pagedGalleryIndex != null) {
                 if (pendingGalleryRefresh != null) {

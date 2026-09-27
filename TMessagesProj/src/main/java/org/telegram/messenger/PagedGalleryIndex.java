@@ -41,16 +41,18 @@ public final class PagedGalleryIndex {
             }
             return;
         }
-        if (sharedIndex != null && !sharedDirty && sharedSignal == null) {
+        if (sharedIndex != null) {
             if (listener != null) {
                 listener.onIndexReady(sharedIndex);
             }
-            return;
+            if (!sharedDirty && sharedSignal == null) {
+                return;
+            }
         }
         if (listener != null) {
             waitingListeners.add(listener);
         }
-        if (sharedSignal != null) {
+        if (sharedSignal != null || pendingSharedRefresh != null) {
             return;
         }
         startSharedLoad(context.getApplicationContext());
@@ -115,19 +117,19 @@ public final class PagedGalleryIndex {
                     return;
                 }
                 sharedSignal = null;
+                if (sharedDirty && pendingSharedRefresh == null) {
+                    scheduleSharedRefresh(context);
+                }
                 if (index != null) {
                     PagedGalleryIndex old = sharedIndex;
                     sharedIndex = index;
+                    notifyWaitingListeners(index);
                     if (old != null) {
+                        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.pagedGalleryIndexDidLoad);
                         old.close();
                     }
-                }
-                if (sharedDirty) {
-                    if (pendingSharedRefresh == null) {
-                        scheduleSharedRefresh(context);
-                    }
                 } else {
-                    notifyWaitingListeners(index != null ? index : sharedIndex);
+                    notifyWaitingListeners(sharedIndex);
                 }
             }
 
@@ -236,6 +238,7 @@ public final class PagedGalleryIndex {
     public static void load(Context context, CancellationSignal signal, Listener listener) {
         final Context appContext = context.getApplicationContext();
         Thread thread = new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             PagedGalleryIndex index = null;
             try {
                 index = build(appContext, signal);
@@ -247,7 +250,6 @@ public final class PagedGalleryIndex {
             final PagedGalleryIndex result = index;
             AndroidUtilities.runOnUIThread(() -> listener.onIndexReady(result));
         }, "gallery-index");
-        thread.setPriority(Thread.MIN_PRIORITY);
         thread.start();
     }
 
@@ -452,6 +454,7 @@ public final class PagedGalleryIndex {
         }
         selection.append(')');
         Thread thread = new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             SparseArray<MediaController.PhotoEntry> loaded = new SparseArray<>();
             Cursor cursor = null;
             try {
@@ -500,7 +503,6 @@ public final class PagedGalleryIndex {
                 listener.onPageReady();
             });
         }, "gallery-page");
-        thread.setPriority(Thread.MIN_PRIORITY);
         thread.start();
     }
 

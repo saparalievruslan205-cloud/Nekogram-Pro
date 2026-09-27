@@ -6110,6 +6110,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     }
 
     private static void reloadGalleryPhotosAlbums(final int guid) {
+        AndroidUtilities.runOnUIThread(() -> PagedGalleryIndex.onGalleryChanged(ApplicationLoader.applicationContext));
         synchronized (galleryLoadLock) {
             if (!pendingGalleryGuids.contains(guid)) {
                 pendingGalleryGuids.add(guid);
@@ -6366,7 +6367,6 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     galleryLoadInProgress = false;
                 }
             }
-            PagedGalleryIndex.onGalleryChanged(ApplicationLoader.applicationContext);
             for (int notificationGuid : notificationGuids) {
                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, notificationGuid, mediaAlbumsSorted, photoAlbumsSorted, cameraAlbumIdFinal);
             }
