@@ -1347,7 +1347,7 @@ public class FileLoadOperation {
         cancel(false);
     }
 
-    private void cancel(boolean deleteFiles) {
+    void cancel(boolean deleteFiles) {
         Utilities.stageQueue.postRunnable(() -> {
             cancelOnStage(deleteFiles);
         });
@@ -2129,6 +2129,7 @@ public class FileLoadOperation {
             if (BuildVars.LOGS_ENABLED) {
                 long time = startTime == 0 ? 0 : (System.currentTimeMillis() - startTime);
                 if (reason == 1) {
+                    FileLog.d("download cancellation completed file=" + cacheFileFinal + " account=" + currentAccount);
                     FileLog.d("cancel downloading file to " + cacheFileFinal + " time = " + time + " dc = " + datacenterId + " size = " + AndroidUtilities.formatFileSize(totalBytesCount));
                 } else {
                     FileLog.d("failed downloading file to " + cacheFileFinal + " reason = " + reason + " time = " + time + " dc = " + datacenterId + " size = " + AndroidUtilities.formatFileSize(totalBytesCount));

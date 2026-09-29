@@ -59,13 +59,19 @@ public class FileLoaderPriorityQueue {
         }
     }
 
-    public void cancel(FileLoadOperation operation) {
+    public boolean cancel(FileLoadOperation operation) {
+        return cancel(operation, false);
+    }
+
+    public boolean cancel(FileLoadOperation operation, boolean deleteFiles) {
         if (operation == null) {
-            return;
+            return false;
         }
         if (allOperations.remove(operation)) {
-            operation.cancel();
+            operation.cancel(deleteFiles);
+            return true;
         }
+        return false;
     }
 
     public void checkLoadingOperations() {

@@ -33,7 +33,9 @@ import java.io.File;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Set;
 
 public class DownloadController extends BaseController implements NotificationCenter.NotificationCenterDelegate {
 
@@ -67,6 +69,7 @@ public class DownloadController extends BaseController implements NotificationCe
     private ArrayList<DownloadObject> videoDownloadQueue = new ArrayList<>();
     private HashMap<String, DownloadObject> downloadQueueKeys = new HashMap<>();
     private HashMap<Pair<Long, Integer>, DownloadObject> downloadQueuePairs = new HashMap<>();
+    private final Set<String> cancelledDownloadFiles = new LinkedHashSet<>();
 
     private HashMap<String, ArrayList<WeakReference<FileDownloadProgressListener>>> loadingFileObservers = new HashMap<>();
     private HashMap<String, ArrayList<MessageObject>> loadingFileMessagesObservers = new HashMap<>();
@@ -1154,6 +1157,15 @@ public class DownloadController extends BaseController implements NotificationCe
             if (path == null || downloadQueueKeys.containsKey(path)) {
                 continue;
             }
+            synchronized (cancelledDownloadFiles) {
+                if (cancelledDownloadFiles.contains(path)) {
+                    if (BuildVars.LOGS_ENABLED) {
+                        FileLog.d("skip requeue of cancelled download file=" + path + " account=" + currentAccount);
+                    }
+                    getMessagesStorage().removeFromDownloadQueue(downloadObject.id, downloadObject.type, false);
+                    continue;
+                }
+            }
             boolean added = true;
             if (photoSize != null) {
                 TLRPC.Photo photo = (TLRPC.Photo) downloadObject.object;
@@ -1201,7 +1213,7 @@ public class DownloadController extends BaseController implements NotificationCe
         if (downloadObject != null) {
             downloadQueueKeys.remove(fileName);
             downloadQueuePairs.remove(new Pair<>(downloadObject.id, downloadObject.type));
-            if (state == 0 || state == 2) {
+            if (state == 0 || state == 1 || state == 2) {
                 getMessagesStorage().removeFromDownloadQueue(downloadObject.id, downloadObject.type, false /*state != 0*/);
             }
             if (downloadObject.type == AUTODOWNLOAD_TYPE_PHOTO) {
@@ -1226,6 +1238,51 @@ public class DownloadController extends BaseController implements NotificationCe
                 }
             }
         }
+    }
+
+    public void cancelDownloadFile(TLRPC.Document document) {
+        if (document == null) {
+            return;
+        }
+        final String fileName = FileLoader.getAttachFileName(document);
+        synchronized (cancelledDownloadFiles) {
+            if (cancelledDownloadFiles.size() >= 128) {
+                cancelledDownloadFiles.remove(cancelledDownloadFiles.iterator().next());
+            }
+            cancelledDownloadFiles.add(fileName);
+        }
+        if (BuildVars.LOGS_ENABLED) {
+            FileLog.d("download cancel requested file=" + fileName + " account=" + currentAccount);
+        }
+        AndroidUtilities.runOnUIThread(() -> {
+            boolean changed = false;
+            DownloadObject downloadObject = downloadQueueKeys.get(fileName);
+            if (downloadObject != null) {
+                checkDownloadFinished(fileName, 1);
+                changed = true;
+            }
+            for (int i = downloadingFiles.size() - 1; i >= 0; i--) {
+                TLRPC.Document current = downloadingFiles.get(i).getDocument();
+                if (current != null && current.id == document.id && current.dc_id == document.dc_id) {
+                    downloadingFiles.remove(i);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
+            }
+        });
+        getMessagesStorage().getStorageQueue().postRunnable(() -> {
+            try {
+                SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("DELETE FROM downloading_documents WHERE hash = ? AND id = ?");
+                state.bindInteger(1, document.dc_id);
+                state.bindLong(2, document.id);
+                state.step();
+                state.dispose();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
     }
 
     public int generateObserverTag() {
@@ -1445,6 +1502,9 @@ public class DownloadController extends BaseController implements NotificationCe
             if (parentDocument == null) {
                 return;
             }
+            synchronized (cancelledDownloadFiles) {
+                cancelledDownloadFiles.remove(FileLoader.getAttachFileName(parentDocument));
+            }
             boolean contains = false;
 
             for (int i = 0; i < recentDownloadingFiles.size(); i++) {
@@ -1483,8 +1543,8 @@ public class DownloadController extends BaseController implements NotificationCe
                         state.bindByteBuffer(1, data);
                         state.bindInteger(2, parentObject.getDocument().dc_id);
                         state.bindLong(3, parentObject.getDocument().id);
-                        state.bindLong(4, System.currentTimeMillis());
                         state.bindInteger(4, 0);
+                        state.bindLong(5, System.currentTimeMillis());
 
                         state.step();
                         state.dispose();

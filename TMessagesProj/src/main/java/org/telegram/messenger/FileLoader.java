@@ -606,6 +606,11 @@ public class FileLoader extends BaseController {
         } else {
             fileName = name;
         }
+        if (document != null) {
+            FileLog.d("cancel load requested fileName=" + fileName + " account=" + currentAccount + " delete=" + deleteFile);
+            FileStreamLoadOperation.cancelStream(currentAccount, document.id);
+            getDownloadController().cancelDownloadFile(document);
+        }
         LoadOperationUIObject uiObject = loadOperationPathsUI.remove(fileName);
         Runnable runnable = uiObject != null ? uiObject.loadInternalRunnable : null;
         boolean removed = uiObject != null;
@@ -616,7 +621,11 @@ public class FileLoader extends BaseController {
             FileLoadOperation operation = loadOperationPaths.remove(fileName);
             if (operation != null) {
                 FileLoaderPriorityQueue queue = operation.getQueue();
-                queue.cancel(operation);
+                if (queue.cancel(operation, deleteFile)) {
+                    FileLog.d("cancel load operation dispatched fileName=" + fileName + " account=" + currentAccount);
+                } else if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("cancel load operation already stopped fileName=" + fileName + " account=" + currentAccount);
+                }
             }
         });
         if (removed && document != null) {
@@ -1037,7 +1046,7 @@ public class FileLoader extends BaseController {
                     delegate.fileDidFailedLoad(fileName, reason);
                 }
 
-                if (document != null && parentObject instanceof MessageObject && reason == 0) {
+                if (document != null && parentObject instanceof MessageObject && (reason == 0 || reason == 1)) {
                     getDownloadController().onDownloadFail((MessageObject) parentObject, reason);
                 } else if (reason == -1) {
                     LaunchActivity.checkFreeDiscSpaceStatic(2);
@@ -1178,10 +1187,15 @@ public class FileLoader extends BaseController {
     }
 
     protected FileLoadOperation loadStreamFile(final FileLoadOperationStream stream, final TLRPC.Document document, final ImageLocation location, final Object parentObject, final long offset, final boolean priority, int loadingPriority, int cacheType) {
+        if (stream instanceof FileStreamLoadOperation && ((FileStreamLoadOperation) stream).isCancelled()) {
+            return null;
+        }
         final CountDownLatch semaphore = new CountDownLatch(1);
         final FileLoadOperation[] result = new FileLoadOperation[1];
         fileLoaderQueue.postRunnable(() -> {
-            result[0] = loadFileInternal(document, null, null, document == null && location != null ? location.location : null, location, parentObject, document == null && location != null ? "mp4" : null, document == null && location != null ? location.currentSize : 0, loadingPriority, stream, offset, priority, cacheType);
+            if (!(stream instanceof FileStreamLoadOperation) || !((FileStreamLoadOperation) stream).isCancelled()) {
+                result[0] = loadFileInternal(document, null, null, document == null && location != null ? location.location : null, location, parentObject, document == null && location != null ? "mp4" : null, document == null && location != null ? location.currentSize : 0, loadingPriority, stream, offset, priority, cacheType);
+            }
             semaphore.countDown();
         });
         awaitFileLoadOperation(semaphore, true);

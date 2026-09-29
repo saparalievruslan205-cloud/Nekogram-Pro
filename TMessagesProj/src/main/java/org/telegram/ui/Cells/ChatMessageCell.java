@@ -17875,6 +17875,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             }
             miniButtonState = 0;
             currentMessageObject.loadingCancelled = true;
+            currentMessageObject.putInDownloadsStore = false;
             FileLoader.getInstance(currentAccount).cancelLoadFile(documentAttach);
             radialProgress.setMiniIcon(getMiniIconForCurrentState(), false, true);
             invalidate();
@@ -17993,6 +17994,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     }
                 } else {
                     currentMessageObject.loadingCancelled = true;
+                    currentMessageObject.putInDownloadsStore = false;
                     if (
                         documentAttachType == DOCUMENT_ATTACH_TYPE_GIF ||
                         documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO ||
@@ -18083,6 +18085,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     }
                 } else {
                     currentMessageObject.loadingCancelled = true;
+                    currentMessageObject.putInDownloadsStore = false;
                     FileLoader.getInstance(currentAccount).cancelLoadFile(documentAttach);
                     buttonState = 2;
                     radialProgress.setIcon(getIconForCurrentState(), false, animated);
