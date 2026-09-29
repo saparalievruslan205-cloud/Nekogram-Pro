@@ -917,14 +917,41 @@ public class MediaDataController extends BaseController {
 
     public ArrayList<TLRPC.Document> getRecentStickers(int type, boolean firstEmpty) {
         ArrayList<TLRPC.Document> arrayList = recentStickers[type];
-        if (type == TYPE_PREMIUM_STICKERS) {
-            return new ArrayList<>(recentStickers[type]);
-        }
-        ArrayList<TLRPC.Document> result = new ArrayList<>(arrayList.subList(0, Math.min(arrayList.size(), NekoConfig.maxRecentStickers)));
-        if (firstEmpty && !result.isEmpty() && !StickersAlert.DISABLE_STICKER_EDITOR && !NekoConfig.minimizedStickerCreator) {
+        ArrayList<TLRPC.Document> result = new ArrayList<>(arrayList.subList(0, Math.min(arrayList.size(), getRecentStickerLimit(type))));
+        if (firstEmpty && type != TYPE_PREMIUM_STICKERS && !result.isEmpty() && !StickersAlert.DISABLE_STICKER_EDITOR && !NekoConfig.minimizedStickerCreator) {
             result.add(0, new TLRPC.TL_documentEmpty());
         }
         return result;
+    }
+
+    private int getRecentStickerLimit(int type) {
+        if (type == TYPE_IMAGE) {
+            return Math.max(1, NekoConfig.maxRecentStickers);
+        } else if (type == TYPE_FAVE) {
+            return Math.max(1, getMessagesController().maxFaveStickersCount);
+        } else if (type == TYPE_GREETINGS || type == TYPE_PREMIUM_STICKERS) {
+            return 200;
+        }
+        return Math.max(1, getMessagesController().maxRecentStickersCount);
+    }
+
+    private void trimRecentStickers(int type) {
+        ArrayList<TLRPC.Document> stickers = recentStickers[type];
+        int limit = getRecentStickerLimit(type);
+        if (stickers.size() > limit) {
+            stickers.subList(limit, stickers.size()).clear();
+        }
+    }
+
+    public void onMaxRecentStickersChanged() {
+        AndroidUtilities.runOnUIThread(() -> {
+            trimRecentStickers(TYPE_IMAGE);
+            recentStickersLoaded[TYPE_IMAGE] = false;
+            getNotificationCenter().postNotificationName(NotificationCenter.recentDocumentsDidLoad, false, TYPE_IMAGE);
+            if (!loadingRecentStickers[TYPE_IMAGE]) {
+                loadRecents(TYPE_IMAGE, false, true, true);
+            }
+        });
     }
 
     public ArrayList<TLRPC.Document> getRecentStickersNoCopy(int type) {
@@ -1024,7 +1051,7 @@ public class MediaDataController extends BaseController {
                     }
                 });
             }
-            maxCount = getMessagesController().maxRecentStickersCount;
+            maxCount = getRecentStickerLimit(type);
         }
         if (recentStickers[type].size() > maxCount || remove) {
             TLRPC.Document old = remove ? document : recentStickers[type].remove(recentStickers[type].size() - 1);
@@ -1951,7 +1978,8 @@ public class MediaDataController extends BaseController {
                     } else {
                         cacheType = 5;
                     }
-                    SQLiteCursor cursor = getMessagesStorage().getDatabase().queryFinalized("SELECT document FROM web_recent_v3 WHERE type = " + cacheType + " ORDER BY date DESC");
+                    int limit = gif ? Math.max(1, getMessagesController().maxRecentGifsCount) : getRecentStickerLimit(type);
+                    SQLiteCursor cursor = getMessagesStorage().getDatabase().queryFinalized("SELECT document FROM web_recent_v3 WHERE type = " + cacheType + " ORDER BY date DESC LIMIT " + limit);
                     ArrayList<TLRPC.Document> arrayList = new ArrayList<>();
                     while (cursor.next()) {
                         if (!cursor.isNull(0)) {
@@ -1966,6 +1994,9 @@ public class MediaDataController extends BaseController {
                         }
                     }
                     cursor.dispose();
+                    if (!gif && arrayList.size() > limit) {
+                        arrayList.subList(limit, arrayList.size()).clear();
+                    }
                     AndroidUtilities.runOnUIThread(() -> {
                         if (gif) {
                             recentGifs = arrayList;
@@ -2086,7 +2117,65 @@ public class MediaDataController extends BaseController {
     }
 
     protected void processLoadedRecentDocuments(int type, ArrayList<TLRPC.Document> documents, boolean gif, int date, boolean replace) {
-        if (documents != null) {
+        if (type == TYPE_IMAGE && replace && documents != null) {
+            AndroidUtilities.runOnUIThread(() -> processLoadedRecentDocumentsInternal(type, documents, gif, date, replace));
+            return;
+        }
+        processLoadedRecentDocumentsInternal(type, documents, gif, date, replace);
+    }
+
+    private void processLoadedRecentDocumentsInternal(int type, ArrayList<TLRPC.Document> documents, boolean gif, int date, boolean replace) {
+        final ArrayList<TLRPC.Document> boundedDocuments;
+        if (documents == null) {
+            boundedDocuments = null;
+        } else if (gif) {
+            boundedDocuments = new ArrayList<>(documents.subList(0, Math.min(documents.size(), Math.max(1, getMessagesController().maxRecentGifsCount))));
+        } else {
+            int max = getRecentStickerLimit(type);
+            ArrayList<TLRPC.Document> result = new ArrayList<>(Math.min(documents.size(), max));
+            for (TLRPC.Document document : documents) {
+                if (document == null) {
+                    continue;
+                }
+                if (type == TYPE_IMAGE && replace) {
+                    boolean duplicate = false;
+                    for (TLRPC.Document existing : result) {
+                        if (existing.id == document.id) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (duplicate) {
+                        continue;
+                    }
+                }
+                if (result.size() == max) {
+                    break;
+                }
+                result.add(document);
+            }
+            // The server may return fewer standard recents than the user's configured local limit.
+            // Keep locally cached older items after the server's current items.
+            if (type == TYPE_IMAGE && replace && result.size() < max) {
+                for (TLRPC.Document existing : recentStickers[TYPE_IMAGE]) {
+                    boolean duplicate = false;
+                    for (TLRPC.Document current : result) {
+                        if (current.id == existing.id) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate) {
+                        result.add(existing);
+                        if (result.size() == max) {
+                            break;
+                        }
+                    }
+                }
+            }
+            boundedDocuments = result;
+        }
+        if (boundedDocuments != null) {
             getMessagesStorage().getStorageQueue().postRunnable(() -> {
                 try {
                     SQLiteDatabase database = getMessagesStorage().getDatabase();
@@ -2094,18 +2183,12 @@ public class MediaDataController extends BaseController {
                     if (gif) {
                         maxCount = getMessagesController().maxRecentGifsCount;
                     } else {
-                        if (type == TYPE_GREETINGS || type == TYPE_PREMIUM_STICKERS) {
-                            maxCount = 200;
-                        } else if (type == TYPE_FAVE) {
-                            maxCount = getMessagesController().maxFaveStickersCount;
-                        } else {
-                            maxCount = getMessagesController().maxRecentStickersCount;
-                        }
+                        maxCount = getRecentStickerLimit(type);
                     }
                     database.beginTransaction();
 
                     SQLitePreparedStatement state = database.executeFast("REPLACE INTO web_recent_v3 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                    int count = documents.size();
+                    int count = boundedDocuments.size();
                     int cacheType;
                     if (gif) {
                         cacheType = 2;
@@ -2129,7 +2212,7 @@ public class MediaDataController extends BaseController {
                         if (a == maxCount) {
                             break;
                         }
-                        TLRPC.Document document = documents.get(a);
+                        TLRPC.Document document = boundedDocuments.get(a);
                         state.requery();
                         state.bindString(1, "" + document.id);
                         state.bindInteger(2, cacheType);
@@ -2148,10 +2231,10 @@ public class MediaDataController extends BaseController {
                     }
                     state.dispose();
                     database.commitTransaction();
-                    if (!replace && documents.size() >= maxCount) {
+                    if (!replace && boundedDocuments.size() >= maxCount) {
                         database.beginTransaction();
-                        for (int a = maxCount; a < documents.size(); a++) {
-                            database.executeFast("DELETE FROM web_recent_v3 WHERE id = '" + documents.get(a).id + "' AND type = " + cacheType).stepThis().dispose();
+                        for (int a = maxCount; a < boundedDocuments.size(); a++) {
+                            database.executeFast("DELETE FROM web_recent_v3 WHERE id = '" + boundedDocuments.get(a).id + "' AND type = " + cacheType).stepThis().dispose();
                         }
                         database.commitTransaction();
                     }
@@ -2185,11 +2268,11 @@ public class MediaDataController extends BaseController {
                     }
 
                 }
-                if (documents != null) {
+                if (boundedDocuments != null) {
                     if (gif) {
-                        recentGifs = documents;
+                        recentGifs = boundedDocuments;
                     } else {
-                        recentStickers[type] = documents;
+                        recentStickers[type] = boundedDocuments;
                     }
                     if (type == TYPE_GREETINGS) {
                         preloadNextGreetingsSticker();

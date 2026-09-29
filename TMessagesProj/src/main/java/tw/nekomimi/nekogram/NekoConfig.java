@@ -9,6 +9,8 @@ import com.google.gson.JsonParser;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.MediaDataController;
+import org.telegram.messenger.UserConfig;
 import org.telegram.ui.ActionBar.Theme;
 
 import java.util.Collections;
@@ -803,8 +805,17 @@ public class NekoConfig {
     }
 
     public static void setMaxRecentStickers(int value) {
+        value = Math.max(20, Math.min(value, 200));
+        if (maxRecentStickers == value) {
+            return;
+        }
         maxRecentStickers = value;
         preferences.edit().putInt("maxRecentStickers", value).apply();
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            if (UserConfig.isValidAccount(account)) {
+                MediaDataController.getInstance(account).onMaxRecentStickersChanged();
+            }
+        }
     }
 
     public static void setNameOrder(int value) {

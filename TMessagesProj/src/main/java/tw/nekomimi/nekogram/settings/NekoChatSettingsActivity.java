@@ -366,9 +366,7 @@ public class NekoChatSettingsActivity extends BaseNekoSettingsActivity {
             int[] counts = {20, 30, 40, 50, 80, 100, 120, 150, 180, 200};
             ArrayList<String> types = new ArrayList<>();
             for (int count : counts) {
-                if (count <= getMessagesController().maxRecentStickersCount) {
-                    types.add(String.valueOf(count));
-                }
+                types.add(String.valueOf(count));
             }
             showPopup(types, types.indexOf(String.valueOf(NekoConfig.maxRecentStickers)), item, view, i -> {
                 NekoConfig.setMaxRecentStickers(Integer.parseInt(types.get(i)));
