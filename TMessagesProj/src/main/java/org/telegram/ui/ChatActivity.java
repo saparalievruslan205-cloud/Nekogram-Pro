@@ -128,6 +128,7 @@ import androidx.dynamicanimation.animation.SpringForce;
 import org.telegram.ui.recyclerview.ChatListItemAnimator;
 import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.GridLayoutManagerFixed;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import org.telegram.ui.recyclerview.LinearSmoothScrollerCustom;
 import androidx.recyclerview.widget.RecyclerView;
@@ -19652,7 +19653,8 @@ public class ChatActivity extends BaseFragment implements
         int maximumHeight = AndroidUtilities.displaySize.y > 0 ? AndroidUtilities.displaySize.y * 2 / 3 : dp(520);
         int listHeight = Math.min(maximumHeight, Math.max(dp(72), orderedMessages.size() * dp(72)));
         recyclerView.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
-        recyclerView.setAdapter(new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        BottomSheet[] orderSheetRef = new BottomSheet[1];
+        RecyclerView.Adapter<RecyclerView.ViewHolder> orderAdapter = new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             @Override
             public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
                 return new RecyclerView.ViewHolder(new SelectionOrderRow(activity)) {};
@@ -19660,24 +19662,63 @@ public class ChatActivity extends BaseFragment implements
 
             @Override
             public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-                ((SelectionOrderRow) holder.itemView).setMessage(orderedMessages.get(position), position + 1);
+                MessageObject message = orderedMessages.get(position);
+                SelectionOrderRow row = (SelectionOrderRow) holder.itemView;
+                row.setMessage(message, position + 1);
+                boolean canOpenPreview = message.isPhoto() || message.isVideo();
+                row.setClickable(canOpenPreview);
+                row.setOnClickListener(canOpenPreview ? v -> {
+                    BottomSheet orderSheet = orderSheetRef[0];
+                    if (orderSheet != null) {
+                        orderSheet.setOnDismissListener(() -> openPhotoViewerForMessage(null, message));
+                        orderSheet.dismiss();
+                    }
+                } : null);
             }
 
             @Override
             public int getItemCount() {
                 return orderedMessages.size();
             }
-        });
-        new BottomSheet.Builder(activity, false, themeDelegate)
+        };
+        recyclerView.setAdapter(orderAdapter);
+        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
+            @Override
+            public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder source, @NonNull RecyclerView.ViewHolder target) {
+                int fromPosition = source.getAdapterPosition();
+                int toPosition = target.getAdapterPosition();
+                if (fromPosition == RecyclerView.NO_POSITION || toPosition == RecyclerView.NO_POSITION || fromPosition == toPosition) {
+                    return false;
+                }
+                Collections.swap(orderedMessages, fromPosition, toPosition);
+                orderAdapter.notifyItemMoved(fromPosition, toPosition);
+                int start = Math.min(fromPosition, toPosition);
+                orderAdapter.notifyItemRangeChanged(start, Math.abs(fromPosition - toPosition) + 1);
+                setSelectedMessagesOrder(orderedMessages);
+                return true;
+            }
+
+            @Override
+            public boolean isItemViewSwipeEnabled() {
+                return false;
+            }
+
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
+            }
+        }).attachToRecyclerView(recyclerView);
+        orderSheetRef[0] = new BottomSheet.Builder(activity, false, themeDelegate)
                 .setTitle(LocaleController.formatString(R.string.SelectionOrderTitle, orderedMessages.size()))
                 .setCustomView(recyclerView)
-                .show();
+                .create();
+        orderSheetRef[0].show();
     }
 
     private class SelectionOrderRow extends LinearLayout {
         private final TextView numberView;
         private final BackupImageView imageView;
         private final TextView descriptionView;
+        private final ImageView dragHandle;
 
         SelectionOrderRow(Context context) {
             super(context);
@@ -19704,6 +19745,14 @@ public class ChatActivity extends BaseFragment implements
             LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f);
             textParams.leftMargin = dp(12);
             addView(descriptionView, textParams);
+
+            dragHandle = new ImageView(context);
+            dragHandle.setImageResource(R.drawable.ic_drag_handle);
+            dragHandle.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText, themeDelegate));
+            dragHandle.setContentDescription(LocaleController.getString(R.string.SelectionOrderDragHandle));
+            LinearLayout.LayoutParams dragParams = new LinearLayout.LayoutParams(dp(24), dp(24));
+            dragParams.leftMargin = dp(8);
+            addView(dragHandle, dragParams);
         }
 
         void setMessage(MessageObject message, int order) {
@@ -19737,6 +19786,16 @@ public class ChatActivity extends BaseFragment implements
                 imageView.setVisibility(View.VISIBLE);
             }
         }
+    }
+
+    private void setSelectedMessagesOrder(ArrayList<MessageObject> orderedMessages) {
+        selectedMessagesInSelectionOrder.clear();
+        for (MessageObject messageObject : orderedMessages) {
+            if (isMessageSelected(messageObject)) {
+                selectedMessagesInSelectionOrder.add(messageObject);
+            }
+        }
+        updateSelectionOrderBadges();
     }
 
     private int getSelectionOrderNumber(MessageObject messageObject) {

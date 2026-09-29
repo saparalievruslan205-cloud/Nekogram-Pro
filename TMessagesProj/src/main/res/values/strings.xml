@@ -3432,6 +3432,7 @@
     <string name="SelectionOrderTitle">Selection order · %1$d</string>
     <string name="SelectionOrderPhoto">Photo</string>
     <string name="SelectionOrderVideo">Video</string>
+    <string name="SelectionOrderDragHandle">Drag to reorder</string>
     <!--password view-->
     <string name="TwoStepVerification">Two-Step Verification</string>
     <string name="TwoStepVerificationTitle">Two-Step Verification</string>

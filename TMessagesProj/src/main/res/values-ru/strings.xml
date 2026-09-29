@@ -267,4 +267,5 @@
     <string name="SelectionOrderTitle">Порядок выбора · %1$d</string>
     <string name="SelectionOrderPhoto">Фото</string>
     <string name="SelectionOrderVideo">Видео</string>
+    <string name="SelectionOrderDragHandle">Перетащите, чтобы изменить порядок</string>
 </resources>
