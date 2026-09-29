@@ -618,7 +618,7 @@ public class CheckBoxBase {
                     textPaint.setColor(getThemedColor(checkColorKey));
                     canvas.save();
                     canvas.scale(checkProgress, 1.0f, cx, cy);
-                    canvas.drawText(checkedText, cx - textPaint.measureText(checkedText) / 2f, dp(y), textPaint);
+                    canvas.drawText(checkedText, cx - textPaint.measureText(checkedText) / 2f, bounds.top + dp(y), textPaint);
                     canvas.restore();
                 } else {
                     path.reset();
