@@ -3426,6 +3426,8 @@
     <string name="AudiosSavedHint_other">%1$d files saved to music</string>
     <string name="MediaSavedHint_one">An item saved to gallery</string>
     <string name="MediaSavedHint_other">%1$d items saved to gallery</string>
+    <string name="GalleryBatchSaveSummary">%1$d saved, %2$d failed</string>
+    <string name="GalleryBatchSaveCancelled">Saving cancelled: %1$d saved, %2$d failed</string>
     <!--password view-->
     <string name="TwoStepVerification">Two-Step Verification</string>
     <string name="TwoStepVerificationTitle">Two-Step Verification</string>

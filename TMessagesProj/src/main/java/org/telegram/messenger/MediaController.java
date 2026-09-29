@@ -135,6 +135,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import tw.nekomimi.nekogram.SaveToDownloadReceiver;
 import tw.nekomimi.nekogram.NekoConfig;
@@ -5442,6 +5444,295 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         new MediaLoader(context, accountInstance, messageObjects, onSaved).start(context);
     }
 
+    public interface GallerySaveCallback {
+        void onFinished(int saved, int failed, boolean cancelled);
+    }
+
+    public static void saveGalleryFilesFromMessages(Context context, AccountInstance accountInstance, ArrayList<MessageObject> messageObjects, GallerySaveCallback callback) {
+        if (context == null || accountInstance == null || messageObjects == null || messageObjects.isEmpty()) {
+            if (callback != null) {
+                AndroidUtilities.runOnUIThread(() -> callback.onFinished(0, messageObjects == null ? 0 : messageObjects.size(), false));
+            }
+            return;
+        }
+        GalleryMediaSaver saver = new GalleryMediaSaver(context.getApplicationContext(), accountInstance, new ArrayList<>(messageObjects), callback);
+        AndroidUtilities.runOnUIThread(saver::start);
+    }
+
+    private static class GalleryMediaSaver implements NotificationCenter.NotificationCenterDelegate {
+        private static class GalleryItem {
+            final MessageObject message;
+            final boolean video;
+            final TLRPC.Document document;
+            final TLRPC.Photo photo;
+            final TLRPC.PhotoSize photoSize;
+
+            GalleryItem(MessageObject message, boolean video, TLRPC.Document document, TLRPC.Photo photo, TLRPC.PhotoSize photoSize) {
+                this.message = message;
+                this.video = video;
+                this.document = document;
+                this.photo = photo;
+                this.photoSize = photoSize;
+            }
+
+            String fileName() {
+                return document != null ? FileLoader.getAttachFileName(document) : FileLoader.getAttachFileName(photoSize);
+            }
+        }
+
+        private static class ActiveLoad {
+            final GalleryItem item;
+            final String fileName;
+            final CountDownLatch finished = new CountDownLatch(1);
+            volatile boolean ownsOperation;
+            volatile boolean started;
+            volatile boolean failed;
+
+            ActiveLoad(GalleryItem item) {
+                this.item = item;
+                this.fileName = item.fileName();
+            }
+        }
+
+        private final Context context;
+        private final AccountInstance accountInstance;
+        private final ArrayList<MessageObject> messages;
+        private final GallerySaveCallback callback;
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final AtomicBoolean finished = new AtomicBoolean();
+        private final Object loadLock = new Object();
+        private final int notificationId = SaveToDownloadReceiver.createNotificationId();
+        private volatile ActiveLoad activeLoad;
+        private volatile long lastProgressUpdate;
+        private int completedCount;
+        private int savedCount;
+        private int failedCount;
+
+        GalleryMediaSaver(Context context, AccountInstance accountInstance, ArrayList<MessageObject> messages, GallerySaveCallback callback) {
+            this.context = context;
+            this.accountInstance = accountInstance;
+            this.messages = messages;
+            this.callback = callback;
+        }
+
+        void start() {
+            accountInstance.getNotificationCenter().addObserver(this, NotificationCenter.fileLoaded);
+            accountInstance.getNotificationCenter().addObserver(this, NotificationCenter.fileLoadFailed);
+            accountInstance.getNotificationCenter().addObserver(this, NotificationCenter.fileLoadProgressChanged);
+            SaveToDownloadReceiver.showNotification(context, notificationId, messages.size(), this::cancel);
+            new Thread(this::run, "GalleryMediaSaver").start();
+        }
+
+        private void run() {
+            try {
+                for (int i = 0; i < messages.size() && !cancelled.get(); i++) {
+                    MessageObject message = messages.get(i);
+                    GalleryItem item = createGalleryItem(message);
+                    if (item == null) {
+                        failedCount++;
+                        completedCount++;
+                        updateProgress(0, 0, true);
+                        continue;
+                    }
+                    File source = findSourceFile(item);
+                    if (source == null || !source.exists()) {
+                        if (!download(item)) {
+                            if (!cancelled.get()) {
+                                failedCount++;
+                                completedCount++;
+                                updateProgress(0, 0, true);
+                            }
+                            continue;
+                        }
+                        source = findSourceFile(item);
+                    }
+                    if (cancelled.get()) {
+                        break;
+                    }
+                    if (source == null || !source.isFile()) {
+                        failedCount++;
+                    } else {
+                        int type = item.video ? 1 : 0;
+                        String extension = FileLoader.getFileExtension(source);
+                        String fileName = AndroidUtilities.generateFileName(type, extension);
+                        if (messages.size() > 1) {
+                            int dot = fileName.lastIndexOf('.');
+                            fileName = dot > 0 ? fileName.substring(0, dot) + "_" + (i + 1) + fileName.substring(dot) : fileName + "_" + (i + 1);
+                        }
+                        Uri saved = saveGalleryFile(type, source, fileName, cancelled::get);
+                        if (saved != null) {
+                            savedCount++;
+                        } else if (!cancelled.get()) {
+                            failedCount++;
+                        }
+                    }
+                    if (!cancelled.get()) {
+                        completedCount++;
+                        updateProgress(0, 0, true);
+                    }
+                }
+            } catch (Throwable e) {
+                FileLog.e(e);
+                if (!cancelled.get()) {
+                    failedCount += Math.max(0, messages.size() - completedCount);
+                }
+            } finally {
+                cancelActiveLoad();
+                finish();
+            }
+        }
+
+        private GalleryItem createGalleryItem(MessageObject message) {
+            if (message == null || message.messageOwner == null || message.isSending() || message.isSendError() || message.messageOwner.ttl > 0 ||
+                    message.messageOwner.noforwards || message.hasRevealedExtendedMedia() || message.needDrawBluredPreview() ||
+                    message.isVoiceOnce() || message.isRoundOnce() || message.isRoundVideo()) {
+                return null;
+            }
+            TLRPC.MessageMedia media = MessageObject.getMedia(message.messageOwner);
+            if (message.isPhoto() && media instanceof TLRPC.TL_messageMediaPhoto && media.photo != null) {
+                TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(media.photo.sizes, AndroidUtilities.getPhotoSize(true), false, null, true);
+                return size == null || size.location == null ? null : new GalleryItem(message, false, null, media.photo, size);
+            }
+            if (message.isVideo() && media instanceof TLRPC.TL_messageMediaDocument) {
+                TLRPC.Document document = message.qualityToSave != null ? message.qualityToSave : media.document;
+                return document == null ? null : new GalleryItem(message, true, document, null, null);
+            }
+            return null;
+        }
+
+        private File findSourceFile(GalleryItem item) {
+            String attachPath = item.message.messageOwner.attachPath;
+            if (!TextUtils.isEmpty(attachPath) && item.message.qualityToSave == null) {
+                File attached = new File(attachPath);
+                if (attached.isFile()) {
+                    return attached;
+                }
+            }
+            FileLoader fileLoader = accountInstance.getFileLoader();
+            File source = item.document != null
+                    ? fileLoader.getPathToAttach(item.document, null, false, true)
+                    : fileLoader.getPathToAttach(item.photoSize, null, false, true);
+            return source != null && source.isFile() ? source : null;
+        }
+
+        private boolean download(GalleryItem item) throws InterruptedException {
+            if (cancelled.get()) {
+                return false;
+            }
+            if (findSourceFile(item) != null) {
+                return true;
+            }
+            FileLoader fileLoader = accountInstance.getFileLoader();
+            ActiveLoad load = new ActiveLoad(item);
+            synchronized (loadLock) {
+                activeLoad = load;
+            }
+            AndroidUtilities.runOnUIThread(() -> {
+                if (cancelled.get()) {
+                    load.finished.countDown();
+                    return;
+                }
+                try {
+                    load.ownsOperation = !fileLoader.isLoadingFile(load.fileName);
+                    if (item.document != null) {
+                        fileLoader.loadFile(item.document, item.message, FileLoader.PRIORITY_HIGH, 0);
+                    } else {
+                        fileLoader.loadFile(ImageLocation.getForPhoto(item.photoSize, item.photo), item.message, "jpg", FileLoader.PRIORITY_HIGH, 0);
+                    }
+                    load.started = true;
+                } catch (Throwable e) {
+                    load.failed = true;
+                    load.finished.countDown();
+                    FileLog.e(e);
+                }
+            });
+            while (!cancelled.get() && !load.finished.await(250, TimeUnit.MILLISECONDS)) {
+                // Periodic wakeup allows cancellation to stop this sequential worker promptly.
+            }
+            if (cancelled.get()) {
+                cancelActiveLoad();
+                return false;
+            }
+            synchronized (loadLock) {
+                if (activeLoad == load) {
+                    activeLoad = null;
+                }
+            }
+            return !load.failed;
+        }
+
+        private void cancel() {
+            if (cancelled.compareAndSet(false, true)) {
+                cancelActiveLoad();
+            }
+        }
+
+        private void cancelActiveLoad() {
+            ActiveLoad load;
+            synchronized (loadLock) {
+                load = activeLoad;
+                activeLoad = null;
+            }
+            if (load == null) {
+                return;
+            }
+            load.finished.countDown();
+            if (load.ownsOperation && load.started) {
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (load.item.document != null) {
+                        accountInstance.getFileLoader().cancelLoadFile(load.item.document);
+                    } else {
+                        accountInstance.getFileLoader().cancelLoadFile(load.item.photoSize);
+                    }
+                });
+            }
+        }
+
+        private void updateProgress(long loaded, long total, boolean itemFinished) {
+            long now = SystemClock.elapsedRealtime();
+            if (!itemFinished && now - lastProgressUpdate < 250) {
+                return;
+            }
+            lastProgressUpdate = now;
+            double current = total > 0 ? Math.max(0, Math.min(1, (double) loaded / total)) : 0;
+            int progress = (int) Math.min(100, ((completedCount + current) * 100.0) / messages.size());
+            AndroidUtilities.runOnUIThread(() -> SaveToDownloadReceiver.updateNotification(notificationId, progress));
+        }
+
+        @Override
+        public void didReceivedNotification(int id, int account, Object... args) {
+            if (id == NotificationCenter.fileLoaded || id == NotificationCenter.fileLoadFailed) {
+                String fileName = (String) args[0];
+                ActiveLoad load = activeLoad;
+                if (load != null && load.fileName.equals(fileName)) {
+                    load.failed = id == NotificationCenter.fileLoadFailed;
+                    load.finished.countDown();
+                }
+            } else if (id == NotificationCenter.fileLoadProgressChanged) {
+                String fileName = (String) args[0];
+                ActiveLoad load = activeLoad;
+                if (load != null && load.fileName.equals(fileName)) {
+                    updateProgress((Long) args[1], (Long) args[2], false);
+                }
+            }
+        }
+
+        private void finish() {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            AndroidUtilities.runOnUIThread(() -> {
+                accountInstance.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoaded);
+                accountInstance.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadFailed);
+                accountInstance.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadProgressChanged);
+                SaveToDownloadReceiver.cancelNotification(notificationId);
+                if (callback != null) {
+                    callback.onFinished(savedCount, failedCount, cancelled.get());
+                }
+            });
+        }
+    }
+
     public static void saveFile(String fullPath, Context context, final int type, final String name, final String mime) {
         saveFile(fullPath, context, type, name, mime, null);
     }
@@ -5767,7 +6058,62 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 "<?xpacket end=\"w\"?>";
     }
 
+    private interface SaveCancellationChecker {
+        boolean isCancelled();
+    }
+
+    private static Uri saveGalleryFile(int type, File sourceFile, String filename, SaveCancellationChecker cancellationChecker) {
+        if (sourceFile == null || !sourceFile.isFile() || AndroidUtilities.isInternalUri(Uri.fromFile(sourceFile)) || type < 0 || type > 1) {
+            return null;
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            return saveFileInternal(type, sourceFile, filename, cancellationChecker);
+        }
+        File directory = new File(Environment.getExternalStoragePublicDirectory(type == 1 ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES), "Nekogram");
+        if (!directory.exists() && !directory.mkdirs()) {
+            return null;
+        }
+        File destination = new File(directory, filename == null ? AndroidUtilities.generateFileName(type, FileLoader.getFileExtension(sourceFile)) : filename);
+        if (destination.exists()) {
+            String name = destination.getName();
+            int dot = name.lastIndexOf('.');
+            String base = dot > 0 ? name.substring(0, dot) : name;
+            String extension = dot > 0 ? name.substring(dot) : "";
+            int suffix = 1;
+            while (destination.exists() && suffix < 1000) {
+                destination = new File(directory, base + "_" + suffix++ + extension);
+            }
+            if (destination.exists()) {
+                return null;
+            }
+        }
+        try (FileInputStream input = new FileInputStream(sourceFile); FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                if (cancellationChecker != null && cancellationChecker.isCancelled()) {
+                    throw new IOException("Gallery save cancelled");
+                }
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+            if (cancellationChecker != null && cancellationChecker.isCancelled()) {
+                throw new IOException("Gallery save cancelled");
+            }
+            AndroidUtilities.addMediaToGallery(destination);
+            return Uri.fromFile(destination);
+        } catch (Exception e) {
+            FileLog.e(e);
+            destination.delete();
+            return null;
+        }
+    }
+
     private static Uri saveFileInternal(int type, File sourceFile, String filename) {
+        return saveFileInternal(type, sourceFile, filename, null);
+    }
+
+    private static Uri saveFileInternal(int type, File sourceFile, String filename, SaveCancellationChecker cancellationChecker) {
         Uri dstUri = null;
         try {
             int selectedType = type;
@@ -5822,6 +6168,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             }
 
             contentValues.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 1);
 
             dstUri = ApplicationLoader.applicationContext.getContentResolver().insert(uriToInsert, contentValues);
             if (dstUri != null) {
@@ -5833,9 +6180,23 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     byte[] buffer = new byte[64 * 1024];
                     int read;
                     while ((read = inputStream.read(buffer)) != -1) {
+                        if (cancellationChecker != null && cancellationChecker.isCancelled()) {
+                            throw new IOException("MediaStore save cancelled");
+                        }
                         outputStream.write(buffer, 0, read);
                     }
+                    outputStream.flush();
+                    if (cancellationChecker != null && cancellationChecker.isCancelled()) {
+                        throw new IOException("MediaStore save cancelled");
+                    }
                 }
+                ContentValues publishValues = new ContentValues();
+                publishValues.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                if (ApplicationLoader.applicationContext.getContentResolver().update(dstUri, publishValues, null, null) <= 0) {
+                    throw new IOException("Could not publish MediaStore item");
+                }
+            } else {
+                throw new IOException("Could not create MediaStore item");
             }
             return dstUri;
         } catch (Exception e) {

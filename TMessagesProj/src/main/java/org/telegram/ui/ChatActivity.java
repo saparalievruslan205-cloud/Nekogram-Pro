@@ -873,6 +873,8 @@ public class ChatActivity extends BaseFragment implements
     private SparseArray<MessageObject>[] selectedMessagesIds = new SparseArray[]{new SparseArray<>(), new SparseArray<>()};
     private SparseArray<MessageObject>[] selectedMessagesCanCopyIds = new SparseArray[]{new SparseArray<>(), new SparseArray<>()};
     private SparseArray<MessageObject>[] selectedMessagesCanStarIds = new SparseArray[]{new SparseArray<>(), new SparseArray<>()};
+    private final ArrayList<MessageObject> selectedMessagesInSelectionOrder = new ArrayList<>();
+    private ArrayList<MessageObject> pendingGallerySaveMessages;
     private boolean hasUnfavedSelected;
     private int cantDeleteMessagesCount;
     private int cantForwardMessagesCount;
@@ -1686,6 +1688,7 @@ public class ChatActivity extends BaseFragment implements
     private final static int edit = 23;
     private final static int add_shortcut = 24;
     private final static int save_to = 25;
+    private final static int save_gallery = 36;
     private final static int auto_delete_timer = 26;
     private final static int change_colors = 27;
     private final static int tag_message = 28;
@@ -3802,6 +3805,7 @@ public class ChatActivity extends BaseFragment implements
             selectedMessagesCanCopyIds[a].clear();
             selectedMessagesCanStarIds[a].clear();
         }
+        selectedMessagesInSelectionOrder.clear();
         scheduledOrNoSoundHint = null;
         scheduledHint = null;
         infoTopView = null;
@@ -3973,6 +3977,7 @@ public class ChatActivity extends BaseFragment implements
                         selectedMessagesCanCopyIds[a].clear();
                         selectedMessagesCanStarIds[a].clear();
                     }
+                    selectedMessagesInSelectionOrder.clear();
                     boolean isMusic = canSaveMusicCount > 0;
                     hideActionMode();
                     updatePinnedMessageView(true);
@@ -3985,6 +3990,13 @@ public class ChatActivity extends BaseFragment implements
                             BulletinFactory.of(ChatActivity.this).createDownloadBulletin(isMusic ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate).show();
                         }
                     });
+                } else if (id == save_gallery) {
+                    if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE) && getParentActivity() != null && getParentActivity().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                        pendingGallerySaveMessages = getSelectedGalleryMessages();
+                        getParentActivity().requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
+                        return;
+                    }
+                    startGalleryBatchSave(getSelectedGalleryMessages());
                 } else if (id == chat_enc_timer) {
                     if (getParentActivity() == null) {
                         return;
@@ -10617,6 +10629,7 @@ public class ChatActivity extends BaseFragment implements
         if (currentEncryptedChat == null) {
             final boolean isSavedMessages = getDialogId() == getUserConfig().getClientUserId() && (chatMode == 0 || chatMode == MODE_SAVED);
             actionModeViews.add(actionMode.addItemWithWidth(save_to, R.drawable.msg_download, dp(48), LocaleController.getString(R.string.SaveToMusic)));
+            actionModeViews.add(actionMode.addItemWithWidth(save_gallery, R.drawable.msg_gallery, dp(48), LocaleController.getString(R.string.SaveToGallery)));
             actionModeViews.add(actionMode.addItemWithWidth(edit, R.drawable.msg_edit, dp(48), LocaleController.getString(R.string.Edit)));
             if (isSavedMessages) {
                 actionModeViews.add(actionMode.addItemWithWidth(tag_message, R.drawable.menu_tag_edit, dp(48), LocaleController.getString(R.string.AccDescrTagMessage)));
@@ -10636,6 +10649,7 @@ public class ChatActivity extends BaseFragment implements
             actionModeViews.add(actionMode.addItemWithWidth(delete, R.drawable.msg_delete, dp(48), LocaleController.getString(R.string.Delete)));
         }
         actionMode.setItemVisibility(edit, canEditMessagesCount == 1 && selectedMessagesIds[0].size() + selectedMessagesIds[1].size() == 1 ? View.VISIBLE : View.GONE);
+        actionMode.setItemVisibility(save_gallery, getSelectedGalleryMessages().isEmpty() ? View.GONE : View.VISIBLE);
         actionMode.setItemVisibility(copy, !isPeerNoForwards() && selectedMessagesCanCopyIds[0].size() + selectedMessagesCanCopyIds[1].size() != 0 ? View.VISIBLE : View.GONE);
         actionMode.setItemVisibility(star, selectedMessagesCanStarIds[0].size() + selectedMessagesCanStarIds[1].size() != 0 ? View.VISIBLE : View.GONE);
         actionMode.setItemVisibility(delete, cantDeleteMessagesCount == 0 ? View.VISIBLE : View.GONE);
@@ -19361,6 +19375,12 @@ public class ChatActivity extends BaseFragment implements
             if (chatThemeBottomSheet != null && chatThemeBottomSheet.chatAttachAlert != null) {
                 chatThemeBottomSheet.chatAttachAlert.getPhotoLayout().checkStorage();
             }
+        } else if (requestCode == 4 && pendingGallerySaveMessages != null) {
+            ArrayList<MessageObject> pending = pendingGallerySaveMessages;
+            pendingGallerySaveMessages = null;
+            if (grantResults != null && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startGalleryBatchSave(pending);
+            }
         } else if ((requestCode == BasePermissionsActivity.REQUEST_CODE_ATTACH_CONTACT || requestCode == 30) && chatAttachAlert != null) {
             chatAttachAlert.onRequestPermissionsResultFragment(requestCode, permissions, grantResults);
         } else if ((requestCode == 17 || requestCode == 18) && chatAttachAlert != null) {
@@ -19595,6 +19615,130 @@ public class ChatActivity extends BaseFragment implements
         }
     }
 
+    private boolean isMessageSelected(MessageObject messageObject) {
+        if (messageObject == null) {
+            return false;
+        }
+        int index = messageObject.getDialogId() == dialog_id ? 0 : 1;
+        return selectedMessagesIds[index].get(messageObject.getId()) != null;
+    }
+
+    private void recordSelectedMessageOrder(MessageObject messageObject) {
+        for (int i = selectedMessagesInSelectionOrder.size() - 1; i >= 0; i--) {
+            MessageObject existing = selectedMessagesInSelectionOrder.get(i);
+            if (!isMessageSelected(existing) || existing.getDialogId() == messageObject.getDialogId() && existing.getId() == messageObject.getId()) {
+                selectedMessagesInSelectionOrder.remove(i);
+            }
+        }
+        selectedMessagesInSelectionOrder.add(messageObject);
+    }
+
+    private void removeSelectedMessageOrder(MessageObject messageObject) {
+        for (int i = selectedMessagesInSelectionOrder.size() - 1; i >= 0; i--) {
+            MessageObject existing = selectedMessagesInSelectionOrder.get(i);
+            if (existing.getDialogId() == messageObject.getDialogId() && existing.getId() == messageObject.getId()) {
+                selectedMessagesInSelectionOrder.remove(i);
+            }
+        }
+    }
+
+    private ArrayList<MessageObject> getSelectedMessagesInSelectionOrder() {
+        ArrayList<MessageObject> result = new ArrayList<>();
+        for (MessageObject messageObject : selectedMessagesInSelectionOrder) {
+            int index = messageObject.getDialogId() == dialog_id ? 0 : 1;
+            MessageObject selected = selectedMessagesIds[index].get(messageObject.getId());
+            if (selected != null && !result.contains(selected)) {
+                result.add(selected);
+            }
+        }
+        for (int index = 1; index >= 0; index--) {
+            for (int i = 0; i < selectedMessagesIds[index].size(); i++) {
+                MessageObject selected = selectedMessagesIds[index].valueAt(i);
+                if (selected != null && !result.contains(selected)) {
+                    result.add(selected);
+                }
+            }
+        }
+        return result;
+    }
+
+    private int getSelectionOrderNumber(MessageObject messageObject) {
+        int selectedNumber = 0;
+        for (int i = 0; i < selectedMessagesInSelectionOrder.size(); i++) {
+            MessageObject selected = selectedMessagesInSelectionOrder.get(i);
+            if (isMessageSelected(selected)) {
+                if (selected.getDialogId() == messageObject.getDialogId() && selected.getId() == messageObject.getId()) {
+                    return selectedNumber;
+                }
+                selectedNumber++;
+            }
+        }
+        return -1;
+    }
+
+    private void startGalleryBatchSave(ArrayList<MessageObject> messageObjects) {
+        pendingGallerySaveMessages = null;
+        for (int a = 0; a < 2; a++) {
+            selectedMessagesIds[a].clear();
+            selectedMessagesCanCopyIds[a].clear();
+            selectedMessagesCanStarIds[a].clear();
+        }
+        selectedMessagesInSelectionOrder.clear();
+        hideActionMode();
+        updatePinnedMessageView(true);
+        updateVisibleRows();
+        MediaController.saveGalleryFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (saved, failed, cancelled) -> {
+            if (getParentActivity() == null) {
+                return;
+            }
+            int resultId = cancelled ? R.string.GalleryBatchSaveCancelled : R.string.GalleryBatchSaveSummary;
+            CharSequence result = LocaleController.formatString(resultId, saved, failed);
+            BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.drawable.msg_gallery, result, "").show();
+        });
+    }
+
+    private void updateSelectionOrderBadges() {
+        if (chatListView == null) {
+            return;
+        }
+        for (int i = 0; i < chatListView.getChildCount(); i++) {
+            View child = chatListView.getChildAt(i);
+            if (child instanceof ChatMessageCell) {
+                ChatMessageCell cell = (ChatMessageCell) child;
+                MessageObject message = cell.getMessageObject();
+                if (message != null && isMessageSelected(message)) {
+                    setCellSelectionBackground(message, cell, message.getDialogId() == dialog_id ? 0 : 1, false);
+                }
+            }
+        }
+    }
+
+    private boolean canSaveMessageToGalleryInBatch(MessageObject messageObject) {
+        if (messageObject == null || messageObject.messageOwner == null || isPeerNoForwards() ||
+                messageObject.messageOwner.noforwards || messageObject.messageOwner.ttl > 0 ||
+                messageObject.hasRevealedExtendedMedia() || messageObject.needDrawBluredPreview() ||
+                messageObject.isSending() || messageObject.isSendError() || messageObject.isVoiceOnce() ||
+                messageObject.isRoundOnce() || messageObject.isRoundVideo()) {
+            return false;
+        }
+        TLRPC.MessageMedia media = MessageObject.getMedia(messageObject.messageOwner);
+        if (media == null || media.ttl_seconds != 0) {
+            return false;
+        }
+        return messageObject.isPhoto() && media instanceof TLRPC.TL_messageMediaPhoto ||
+                messageObject.isVideo() && media instanceof TLRPC.TL_messageMediaDocument;
+    }
+
+    private ArrayList<MessageObject> getSelectedGalleryMessages() {
+        ArrayList<MessageObject> result = new ArrayList<>();
+        for (MessageObject messageObject : getSelectedMessagesInSelectionOrder()) {
+            if (canSaveMessageToGalleryInBatch(messageObject)) {
+                result.add(messageObject);
+            }
+        }
+        return result;
+    }
+
     private void addToSelectedMessages(MessageObject messageObject, boolean outside) {
         addToSelectedMessages(messageObject, outside, true);
     }
@@ -19638,6 +19782,7 @@ public class ChatActivity extends BaseFragment implements
             }
             if (selectedMessagesIds[index].indexOfKey(messageObject.getId()) >= 0) {
                 selectedMessagesIds[index].remove(messageObject.getId());
+                removeSelectedMessageOrder(messageObject);
                 if (!isReport()) {
                     if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
                         selectedMessagesCanCopyIds[index].remove(messageObject.getId());
@@ -19675,6 +19820,7 @@ public class ChatActivity extends BaseFragment implements
                     return;
                 }
                 selectedMessagesIds[index].put(messageObject.getId(), messageObject);
+                recordSelectedMessageOrder(messageObject);
                 if (!isReport()) {
                     if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
                         selectedMessagesCanCopyIds[index].put(messageObject.getId(), messageObject);
@@ -19715,6 +19861,7 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 createActionMode();
                 ActionBarMenuItem saveItem = actionBar.createActionMode().getItem(save_to);
+                ActionBarMenuItem saveGalleryItem = actionBar.createActionMode().getItem(save_gallery);
                 ActionBarMenuItem copyItem = actionBar.createActionMode().getItem(copy);
                 ActionBarMenuItem starItem = actionBar.createActionMode().getItem(star);
                 ActionBarMenuItem editItem = actionBar.createActionMode().getItem(edit);
@@ -19813,6 +19960,9 @@ public class ChatActivity extends BaseFragment implements
                 if (saveItem != null) {
                     saveItem.setVisibility(((canSaveMusicCount > 0 && canSaveDocumentsCount == 0) || (canSaveMusicCount == 0 && canSaveDocumentsCount > 0)) && cantSaveMessagesCount == 0 ? View.VISIBLE : View.GONE);
                     saveItem.setContentDescription(canSaveMusicCount > 0 ? LocaleController.getString(R.string.SaveToMusic) : LocaleController.getString(R.string.SaveToDownloads));
+                }
+                if (saveGalleryItem != null) {
+                    saveGalleryItem.setVisibility(getSelectedGalleryMessages().isEmpty() ? View.GONE : View.VISIBLE);
                 }
 
                 int copyVisible = View.GONE, starVisible = View.GONE, newCopyVisible = View.GONE, newStarVisible = View.GONE;
@@ -19959,6 +20109,9 @@ public class ChatActivity extends BaseFragment implements
                     ) < 4 ? View.VISIBLE : View.GONE);
                 }
             }
+        }
+        if (last) {
+            updateSelectionOrderBadges();
         }
         updateSelectedMessageReactions();
     }
@@ -35674,6 +35827,7 @@ public class ChatActivity extends BaseFragment implements
     }
 
     public void clearSelectionMode(boolean suppressUpdateMessageObject) {
+        selectedMessagesInSelectionOrder.clear();
         for (int a = 1; a >= 0; a--) {
             selectedMessagesIds[a].clear();
             selectedMessagesCanCopyIds[a].clear();
@@ -37105,7 +37259,7 @@ public class ChatActivity extends BaseFragment implements
             }
         }
         messageCell.setDrawSelectionBackground(groupedMessages == null);
-        messageCell.setChecked(true, groupedMessages == null, animated);
+        messageCell.setChecked(getSelectionOrderNumber(message), true, groupedMessages == null, animated);
     }
 
     private void openClickableLink(CharacterStyle url, String str, boolean longPress, final ChatMessageCell cell, final MessageObject messageObject, boolean forceNoIV) {

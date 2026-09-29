@@ -23183,14 +23183,18 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     public void setChecked(boolean checked, boolean allChecked, boolean animated) {
+        setChecked(-1, checked, allChecked, animated);
+    }
+
+    public void setChecked(int selectionNumber, boolean checked, boolean allChecked, boolean animated) {
         if (!checked && animated && currentMessageObject != null && currentMessageObject.deletedByThanos) {
             return;
         }
         if (checkBox != null) {
-            checkBox.setChecked(allChecked, animated);
+            checkBox.setChecked(checked ? selectionNumber : -1, allChecked, animated);
         }
         if (mediaCheckBox != null) {
-            mediaCheckBox.setChecked(checked, animated);
+            mediaCheckBox.setChecked(checked ? selectionNumber : -1, checked, animated);
         }
         backgroundDrawable.setSelected(allChecked, animated);
     }
