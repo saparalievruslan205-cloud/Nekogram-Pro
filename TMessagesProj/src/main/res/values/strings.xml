@@ -3428,6 +3428,10 @@
     <string name="MediaSavedHint_other">%1$d items saved to gallery</string>
     <string name="GalleryBatchSaveSummary">%1$d saved, %2$d failed</string>
     <string name="GalleryBatchSaveCancelled">Saving cancelled: %1$d saved, %2$d failed</string>
+    <string name="SelectionOrderButton">Order</string>
+    <string name="SelectionOrderTitle">Selection order · %1$d</string>
+    <string name="SelectionOrderPhoto">Photo</string>
+    <string name="SelectionOrderVideo">Video</string>
     <!--password view-->
     <string name="TwoStepVerification">Two-Step Verification</string>
     <string name="TwoStepVerificationTitle">Two-Step Verification</string>

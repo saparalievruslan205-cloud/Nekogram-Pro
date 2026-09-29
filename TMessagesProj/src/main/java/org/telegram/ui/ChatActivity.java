@@ -8333,31 +8333,7 @@ public class ChatActivity extends BaseFragment implements
         }
 
         actionsButtonsLayout = new ChatActivityActionsButtonsLayout(context, resourceProvider, blurredBackgroundColorProvider, glassBackgroundDrawableFactory);
-        actionsButtonsLayout.setSelectButtonOnClickListener(v -> {
-            ArrayList<Integer> ids = new ArrayList<>();
-            for (int a = 1; a >= 0; a--) {
-                for (int b = 0; b < selectedMessagesIds[a].size(); b++) {
-                    ids.add(selectedMessagesIds[a].keyAt(b));
-                }
-            }
-            Collections.sort(ids);
-            Integer begin = ids.get(0);
-            Integer end = ids.get(ids.size() - 1);
-            for (int i = 0; i < messages.size(); i++) {
-                int msgId = messages.get(i).getId();
-                if (msgId > begin && msgId < end && selectedMessagesIds[0].indexOfKey(msgId) < 0) {
-                    MessageObject message = messages.get(i);
-
-                    if (message.contentType != 0) {
-                        continue;
-                    }
-
-                    addToSelectedMessages(message, true);
-                }
-            }
-            updateActionModeTitle();
-            updateVisibleRows();
-        });
+        actionsButtonsLayout.setSelectButtonOnClickListener(v -> showSelectionOrderPreview());
         actionsButtonsLayout.setReplyButtonOnClickListener(v -> {
             MessageObject messageObject = null;
             for (int a = 1; a >= 0; a--) {
@@ -19662,6 +19638,107 @@ public class ChatActivity extends BaseFragment implements
         return result;
     }
 
+    private void showSelectionOrderPreview() {
+        Activity activity = getParentActivity();
+        ArrayList<MessageObject> orderedMessages = getSelectedMessagesInSelectionOrder();
+        if (activity == null || orderedMessages.isEmpty()) {
+            return;
+        }
+        RecyclerView recyclerView = new RecyclerView(activity);
+        recyclerView.setLayoutManager(new LinearLayoutManager(activity));
+        recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        recyclerView.setBackgroundColor(Theme.getColor(Theme.key_dialogBackground, themeDelegate));
+        recyclerView.setPadding(0, 0, 0, dp(8));
+        int maximumHeight = AndroidUtilities.displaySize.y > 0 ? AndroidUtilities.displaySize.y * 2 / 3 : dp(520);
+        int listHeight = Math.min(maximumHeight, Math.max(dp(72), orderedMessages.size() * dp(72)));
+        recyclerView.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
+        recyclerView.setAdapter(new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            @Override
+            public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+                return new RecyclerView.ViewHolder(new SelectionOrderRow(activity)) {};
+            }
+
+            @Override
+            public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+                ((SelectionOrderRow) holder.itemView).setMessage(orderedMessages.get(position), position + 1);
+            }
+
+            @Override
+            public int getItemCount() {
+                return orderedMessages.size();
+            }
+        });
+        new BottomSheet.Builder(activity, false, themeDelegate)
+                .setTitle(LocaleController.formatString(R.string.SelectionOrderTitle, orderedMessages.size()))
+                .setCustomView(recyclerView)
+                .show();
+    }
+
+    private class SelectionOrderRow extends LinearLayout {
+        private final TextView numberView;
+        private final BackupImageView imageView;
+        private final TextView descriptionView;
+
+        SelectionOrderRow(Context context) {
+            super(context);
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setPadding(dp(16), dp(6), dp(16), dp(6));
+            numberView = new TextView(context);
+            numberView.setGravity(Gravity.CENTER);
+            numberView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, themeDelegate));
+            numberView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+            numberView.setTypeface(AndroidUtilities.bold());
+            addView(numberView, new LinearLayout.LayoutParams(dp(32), LayoutParams.MATCH_PARENT));
+
+            imageView = new BackupImageView(context);
+            imageView.setRoundRadius(dp(6));
+            addView(imageView, new LinearLayout.LayoutParams(dp(60), dp(60)));
+
+            descriptionView = new TextView(context);
+            descriptionView.setGravity(Gravity.CENTER_VERTICAL);
+            descriptionView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText, themeDelegate));
+            descriptionView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+            descriptionView.setMaxLines(2);
+            descriptionView.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f);
+            textParams.leftMargin = dp(12);
+            addView(descriptionView, textParams);
+        }
+
+        void setMessage(MessageObject message, int order) {
+            numberView.setText(String.valueOf(order));
+            CharSequence description = message.messageText;
+            TLRPC.MessageMedia media = message.messageOwner == null ? null : MessageObject.getMedia(message.messageOwner);
+            if (TextUtils.isEmpty(description)) {
+                if (message.isPhoto()) {
+                    description = LocaleController.getString(R.string.SelectionOrderPhoto);
+                } else if (message.isVideo()) {
+                    description = LocaleController.getString(R.string.SelectionOrderVideo);
+                } else if (message.getDocument() != null) {
+                    description = FileLoader.getDocumentFileName(message.getDocument());
+                } else {
+                    description = LocaleController.getString(R.string.Message);
+                }
+            }
+            descriptionView.setText(description);
+            imageView.setVisibility(View.GONE);
+            if (media != null && media.photo != null && message.isPhoto()) {
+                TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(media.photo.sizes, dp(60), false, null, true);
+                if (size != null) {
+                    imageView.setImage(ImageLocation.getForPhoto(size, media.photo), "60_60", Theme.chat_attachEmptyDrawable, message);
+                    imageView.setVisibility(View.VISIBLE);
+                }
+            } else if (message.getDocument() != null && (message.isVideo() || message.isPhoto())) {
+                TLRPC.Document document = message.getDocument();
+                TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(document.thumbs, dp(60), false, null, true);
+                ImageLocation location = thumb != null ? ImageLocation.getForDocument(thumb, document) : ImageLocation.getForDocument(document);
+                imageView.setImage(location, "60_60", Theme.chat_attachEmptyDrawable, message);
+                imageView.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
     private int getSelectionOrderNumber(MessageObject messageObject) {
         int selectedNumber = 0;
         for (int i = 0; i < selectedMessagesInSelectionOrder.size(); i++) {
@@ -20047,32 +20124,7 @@ public class ChatActivity extends BaseFragment implements
                 }
 
                 if (actionsButtonsLayout != null) {
-                    int newVisibility = View.GONE;
-                    if (selectedMessagesIds[0].size() > 1) {
-                        ArrayList<Integer> ids = new ArrayList<>();
-                        for (int a = 1; a >= 0; a--) {
-                            for (int b = 0; b < selectedMessagesIds[a].size(); b++) {
-                                ids.add(selectedMessagesIds[a].keyAt(b));
-                            }
-                        }
-                        Collections.sort(ids);
-                        Integer begin = ids.get(0);
-                        Integer end = ids.get(ids.size() - 1);
-                        for (int i = 0; i < messages.size(); i++) {
-                            int msgId = messages.get(i).getId();
-                            if (msgId > begin && msgId < end && selectedMessagesIds[0].indexOfKey(msgId) < 0) {
-                                MessageObject message = messages.get(i);
-
-                                if (message.contentType != 0) {
-                                    continue;
-                                }
-
-                                newVisibility = View.VISIBLE;
-                                break;
-                            }
-                        }
-                    }
-                    actionsButtonsLayout.showSelectButton(newVisibility == View.VISIBLE, true);
+                    actionsButtonsLayout.showSelectButton(selectedMessagesIds[0].size() + selectedMessagesIds[1].size() > 0, true);
                 }
 
                 if (editItem != null) {

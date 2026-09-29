@@ -263,4 +263,8 @@
     <string name="RemindTodayAt">\'Отправить сегодня в\' HH:mm</string>
     <string name="RemindDayAt">\'Отправить\' d MMM \'в\' HH:mm</string>
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
+    <string name="SelectionOrderButton">Порядок</string>
+    <string name="SelectionOrderTitle">Порядок выбора · %1$d</string>
+    <string name="SelectionOrderPhoto">Фото</string>
+    <string name="SelectionOrderVideo">Видео</string>
 </resources>
