@@ -1,13 +1,20 @@
-# 🐾 Nekogram
+# Nekogram Pro
 
-## Nekogram Pro fork
+Nekogram Pro is a separate Android build based on [Nekogram](https://github.com/Nekogram/Nekogram). It keeps the upstream client and adds improvements maintained in this fork:
 
-This fork contains the large-gallery optimizations and an independent update channel for the separately installed `tw.nekomimi.nekogram.beta` app, displayed as **Nekogram Pro**. Download its APK from [this fork's releases](https://github.com/saparalievruslan205-cloud/Nekogram-Pro/releases/latest). The links below belong to the original Nekogram project.
+- Large photo and video libraries load incrementally in the media picker.
+- Selected photos and videos can be reviewed, reordered, and saved to the gallery in that order.
+- Media size and download progress are shown in chat.
 
-The release and signing convention is documented in [PRO_RELEASE.md](PRO_RELEASE.md).
+Download the latest APK from [Releases](https://github.com/saparalievruslan205-cloud/Nekogram-Pro/releases/latest). The app uses the separate package ID `tw.nekomimi.nekogram.beta`.
 
-[![Crowdin](https://badges.crowdin.net/e/a094217ac83905ae1625526d59bba8dc/localized.svg)](https://neko.crowdin.com/nekogram)  
-Nekogram is a third-party Telegram client with not many but useful modifications.
+The release and signing process is documented in [PRO_RELEASE.md](PRO_RELEASE.md). The build instructions below are inherited from the upstream project.
+
+## Upstream Nekogram
+
+[![Crowdin](https://badges.crowdin.net/e/a094217ac83905ae1625526d59bba8dc/localized.svg)](https://neko.crowdin.com/nekogram)
+
+Nekogram is a third-party Telegram client. For upstream downloads, issues, and project information, see:
 
 - Website: https://nekogram.app
 - Telegram channel: https://t.me/nekoupdates
