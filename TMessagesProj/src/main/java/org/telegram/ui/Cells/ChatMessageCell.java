@@ -29415,7 +29415,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     private void drawMediaSizeBadge(Canvas canvas) {
-        if (!isMediaSizeBadgeSupported() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(32) || photoImage.getImageHeight() <= dp(20)) {
+        if (!isMediaSizeBadgeSupported() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(16) || photoImage.getImageHeight() <= dp(14)) {
             return;
         }
         if (currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealed && mediaSpoilerRevealProgress < 1f) {
@@ -29439,16 +29439,20 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     private void drawMediaSizeBadgeText(Canvas canvas, String text) {
         mediaSizeBadgeTextPaint.setColor(Color.WHITE);
-        mediaSizeBadgeTextPaint.setTextSize(dp(11));
+        float imageWidth = photoImage.getImageWidth();
+        float imageHeight = photoImage.getImageHeight();
+        float horizontalInset = Math.min(dp(6), imageWidth * 0.05f);
+        float verticalInset = Math.min(dp(6), imageHeight * 0.08f);
+        float height = Math.min(dp(20), imageHeight - verticalInset * 2);
+        mediaSizeBadgeTextPaint.setTextSize(Math.min(dp(11), height * 0.55f));
         mediaSizeBadgeTextPaint.setFakeBoldText(true);
-        float paddingX = dp(6);
-        float availableTextWidth = Math.max(dp(24), photoImage.getImageWidth() - dp(16) - paddingX * 2);
+        float paddingX = Math.min(dp(6), Math.max(dp(2), imageWidth * 0.04f));
+        float availableTextWidth = Math.max(dp(8), imageWidth - horizontalInset * 2 - paddingX * 2);
         CharSequence displayText = TextUtils.ellipsize(text, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
         float textWidth = mediaSizeBadgeTextPaint.measureText(displayText, 0, displayText.length());
-        float height = dp(20);
-        float left = photoImage.getImageX() + dp(6);
-        float top = photoImage.getImageY() + dp(6);
-        float right = left + textWidth + paddingX * 2;
+        float left = photoImage.getImageX() + horizontalInset;
+        float top = photoImage.getImageY() + verticalInset;
+        float right = Math.min(left + textWidth + paddingX * 2, photoImage.getImageX() + imageWidth - horizontalInset);
         mediaSizeBadgeRect.set(left, top, right, top + height);
 
         mediaSizeBadgeBackgroundPaint.setColor(0xB8000000);
