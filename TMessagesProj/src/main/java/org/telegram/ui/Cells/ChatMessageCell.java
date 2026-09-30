@@ -29444,8 +29444,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         float horizontalInset = Math.min(dp(6), imageWidth * 0.05f);
         float verticalInset = Math.min(dp(6), imageHeight * 0.08f);
         float height = Math.min(dp(20), imageHeight - verticalInset * 2);
-        mediaSizeBadgeTextPaint.setTextSize(Math.min(dp(11), height * 0.55f));
-        mediaSizeBadgeTextPaint.setFakeBoldText(true);
+        mediaSizeBadgeTextPaint.setTextSize(Math.min(dp(10), height * 0.52f));
+        mediaSizeBadgeTextPaint.setFakeBoldText(false);
         float paddingX = Math.min(dp(6), Math.max(dp(2), imageWidth * 0.04f));
         float availableTextWidth = Math.max(dp(8), imageWidth - horizontalInset * 2 - paddingX * 2);
         CharSequence displayText = TextUtils.ellipsize(text, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
@@ -29455,9 +29455,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         float right = Math.min(left + textWidth + paddingX * 2, photoImage.getImageX() + imageWidth - horizontalInset);
         mediaSizeBadgeRect.set(left, top, right, top + height);
 
-        mediaSizeBadgeBackgroundPaint.setColor(0xB8000000);
-        mediaSizeBadgeBackgroundPaint.setAlpha(0x70);
-        mediaSizeBadgeTextPaint.setAlpha(255);
+        mediaSizeBadgeBackgroundPaint.setColor(0x80000000);
+        mediaSizeBadgeBackgroundPaint.setAlpha(0x50);
+        mediaSizeBadgeTextPaint.setAlpha(0xE0);
         canvas.drawRoundRect(mediaSizeBadgeRect, dp(6), dp(6), mediaSizeBadgeBackgroundPaint);
         Paint.FontMetrics fontMetrics = mediaSizeBadgeTextPaint.getFontMetrics();
         float baseline = mediaSizeBadgeRect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f;
