@@ -29362,7 +29362,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (currentMessageObject.type == MessageObject.TYPE_PHOTO) {
             return true;
         }
-        return documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO && currentMessagesGroup != null && currentMessageObject.hasValidGroupId();
+        TLRPC.Document document = currentMessageObject.getDocument();
+        return currentMessageObject.hasValidGroupId() && MessageObject.isVideoDocument(document);
     }
 
     private long getMediaSizeBadgeTotalSize() {
@@ -29372,8 +29373,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (currentMessageObject == null) {
             return 0;
         }
-        if (documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO && documentAttach != null && documentAttach.size > 0) {
-            return documentAttach.size;
+        TLRPC.Document document = currentMessageObject.getDocument();
+        if (MessageObject.isVideoDocument(document) && document.size > 0) {
+            return document.size;
         }
 
         TLRPC.MessageMedia media = MessageObject.getMedia(currentMessageObject.messageOwner);
@@ -29397,7 +29399,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
 
         try {
-            TLObject attach = documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO ? documentAttach : currentPhotoObject;
+            TLObject attach = MessageObject.isVideoDocument(document) ? document : currentPhotoObject;
             if (attach != null) {
                 File file = FileLoader.getInstance(currentAccount).getPathToAttach(attach);
                 if (file.isFile()) {
