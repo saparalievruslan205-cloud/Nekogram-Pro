@@ -17872,6 +17872,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (miniButtonState == 0) {
             miniButtonState = 1;
             radialProgress.setProgress(0, false);
+            if (documentAttach != null) {
+                DownloadController.getInstance(currentAccount).allowManualDownload(documentAttach);
+            }
             if (currentMessageObject != null && !currentMessageObject.isAnyKindOfSticker()) {
                 currentMessageObject.putInDownloadsStore = true;
             }
@@ -17909,6 +17912,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             currentMessageObject.putInDownloadsStore = true;
         }
         if (buttonState == 0 && (!drawVideoImageButton || video)) {
+            if (documentAttach != null) {
+                DownloadController.getInstance(currentAccount).allowManualDownload(documentAttach);
+            }
             if (documentAttachType == DOCUMENT_ATTACH_TYPE_AUDIO || documentAttachType == DOCUMENT_ATTACH_TYPE_MUSIC || documentAttachType == DOCUMENT_ATTACH_TYPE_ROUND && currentMessageObject != null && currentMessageObject.isVoiceTranscriptionOpen() && currentMessageObject.mediaExists) {
                 if (miniButtonState == 0) {
                     FileLoader.getInstance(currentAccount).loadFile(documentAttach, currentMessageObject, FileLoader.PRIORITY_NORMAL_UP, 0);

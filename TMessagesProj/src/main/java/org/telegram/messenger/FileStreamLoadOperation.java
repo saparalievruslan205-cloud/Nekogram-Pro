@@ -34,13 +34,23 @@ import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
 @OptIn(markerClass = UnstableApi.class)
 public class FileStreamLoadOperation implements DataSource, FileLoadOperationStream {
 
-    public static final ConcurrentHashMap<Long, FileStreamLoadOperation> allStreams = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Set<FileStreamLoadOperation>> allStreams = new ConcurrentHashMap<>();
+
+    private static String streamKey(int account, long documentId) {
+        return account + ":" + documentId;
+    }
+
+    static FileStreamLoadOperation getStream(int account, long documentId) {
+        Set<FileStreamLoadOperation> streams = allStreams.get(streamKey(account, documentId));
+        return streams == null || streams.isEmpty() ? null : streams.iterator().next();
+    }
 
     private volatile FileLoadOperation loadOperation;
 
@@ -109,7 +119,13 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         cancelled = false;
         transferWasStarted = false;
         opened = true;
-        allStreams.put(document.id, this);
+        allStreams.compute(streamKey(currentAccount, document.id), (key, streams) -> {
+            if (streams == null) {
+                streams = ConcurrentHashMap.newKeySet();
+            }
+            streams.add(this);
+            return streams;
+        });
         currentOffset = dataSpec.position;
         requestedLength = dataSpec.length;
         loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
@@ -173,13 +189,15 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     }
 
     public static void cancelStream(int account, long documentId) {
-        FileStreamLoadOperation stream = allStreams.get(documentId);
-        if (stream != null && stream.currentAccount == account) {
-            stream.cancel();
+        Set<FileStreamLoadOperation> streams = allStreams.get(streamKey(account, documentId));
+        if (streams != null) {
+            for (FileStreamLoadOperation stream : streams) {
+                stream.cancel();
+            }
         }
     }
 
-    public void cancel() {
+    public synchronized void cancel() {
         if (cancelled) {
             return;
         }
@@ -340,7 +358,11 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         }
         uri = null;
         if (document != null) {
-            allStreams.remove(document.id, this);
+            String key = streamKey(currentAccount, document.id);
+            allStreams.computeIfPresent(key, (ignored, streams) -> {
+                streams.remove(this);
+                return streams.isEmpty() ? null : streams;
+            });
         }
         if (opened) {
             opened = false;

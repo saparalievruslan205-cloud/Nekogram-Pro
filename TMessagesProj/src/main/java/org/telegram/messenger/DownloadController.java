@@ -1188,6 +1188,9 @@ public class DownloadController extends BaseController implements NotificationCe
                 queue.add(downloadObject);
                 downloadQueueKeys.put(path, downloadObject);
                 downloadQueuePairs.put(new Pair<>(downloadObject.id, downloadObject.type), downloadObject);
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("download requeued account=" + currentAccount + " key=" + Integer.toHexString(path.hashCode()));
+                }
             }
         }
     }
@@ -1279,10 +1282,22 @@ public class DownloadController extends BaseController implements NotificationCe
                 state.bindLong(2, document.id);
                 state.step();
                 state.dispose();
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("download database item removed account=" + currentAccount);
+                }
             } catch (Exception e) {
                 FileLog.e(e);
             }
         });
+    }
+
+    public void allowManualDownload(TLRPC.Document document) {
+        if (document == null) {
+            return;
+        }
+        synchronized (cancelledDownloadFiles) {
+            cancelledDownloadFiles.remove(FileLoader.getAttachFileName(document));
+        }
     }
 
     public int generateObserverTag() {
@@ -1503,7 +1518,12 @@ public class DownloadController extends BaseController implements NotificationCe
                 return;
             }
             synchronized (cancelledDownloadFiles) {
-                cancelledDownloadFiles.remove(FileLoader.getAttachFileName(parentDocument));
+                if (cancelledDownloadFiles.contains(FileLoader.getAttachFileName(parentDocument))) {
+                    if (BuildVars.LOGS_ENABLED) {
+                        FileLog.d("skip requeue of cancelled download account=" + currentAccount);
+                    }
+                    return;
+                }
             }
             boolean contains = false;
 
@@ -1536,6 +1556,11 @@ public class DownloadController extends BaseController implements NotificationCe
                 downloadingFiles.add(0, parentObject);
                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
                     try {
+                        synchronized (cancelledDownloadFiles) {
+                            if (cancelledDownloadFiles.contains(FileLoader.getAttachFileName(parentDocument))) {
+                                return;
+                            }
+                        }
                         NativeByteBuffer data = new NativeByteBuffer(parentObject.messageOwner.getObjectSize());
                         parentObject.messageOwner.serializeToStream(data);
 

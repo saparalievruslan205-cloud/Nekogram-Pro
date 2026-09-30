@@ -67,11 +67,9 @@ public class FileLoaderPriorityQueue {
         if (operation == null) {
             return false;
         }
-        if (allOperations.remove(operation)) {
-            operation.cancel(deleteFiles);
-            return true;
-        }
-        return false;
+        boolean removed = allOperations.remove(operation);
+        operation.cancel(deleteFiles);
+        return removed;
     }
 
     public void checkLoadingOperations() {

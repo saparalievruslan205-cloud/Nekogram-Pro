@@ -623,6 +623,9 @@ public class FileLoader extends BaseController {
                 FileLoaderPriorityQueue queue = operation.getQueue();
                 if (queue.cancel(operation, deleteFile)) {
                     FileLog.d("cancel load operation dispatched fileName=" + fileName + " account=" + currentAccount);
+                    if (BuildVars.LOGS_ENABLED) {
+                        FileLog.d("download queue item removed account=" + currentAccount);
+                    }
                 } else if (BuildVars.LOGS_ENABLED) {
                     FileLog.d("cancel load operation already stopped fileName=" + fileName + " account=" + currentAccount);
                 }
@@ -1013,6 +1016,9 @@ public class FileLoader extends BaseController {
 
             @Override
             public void didFinishLoadingFile(FileLoadOperation operation, File finalFile) {
+                if (BuildVars.LOGS_ENABLED && document != null) {
+                    FileLog.d("download completed account=" + currentAccount + " key=" + Integer.toHexString(fileName.hashCode()));
+                }
                 if (!operation.isPreloadVideoOperation() && operation.isPreloadFinished()) {
                     checkDownloadQueue(operation, operation.getQueue(), 0);
                     return;
@@ -1040,6 +1046,9 @@ public class FileLoader extends BaseController {
 
             @Override
             public void didFailedLoadingFile(FileLoadOperation operation, int reason) {
+                if (BuildVars.LOGS_ENABLED && document != null) {
+                    FileLog.d((reason == 1 ? "download cancelled" : "download failed") + " account=" + currentAccount + " key=" + Integer.toHexString(fileName.hashCode()));
+                }
                 loadOperationPathsUI.remove(fileName);
                 checkDownloadQueue(operation, operation.getQueue());
                 if (delegate != null) {
@@ -1078,9 +1087,12 @@ public class FileLoader extends BaseController {
         operation.setDelegate(fileLoadOperationDelegate);
 
         loadOperationPaths.put(finalFileName, operation);
+        if (BuildVars.LOGS_ENABLED && document != null) {
+            FileLog.d("download started account=" + currentAccount + " key=" + Integer.toHexString(finalFileName.hashCode()));
+        }
         operation.setPriority(priority);
         if (stream == null) {
-            stream = FileStreamLoadOperation.allStreams.get(documentId);
+            stream = FileStreamLoadOperation.getStream(currentAccount, documentId);
         }
         if (stream != null) {
             operation.setStream(stream, streamPriority, streamOffset);
