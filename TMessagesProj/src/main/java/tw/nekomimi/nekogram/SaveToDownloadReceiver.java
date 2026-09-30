@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.R;
@@ -39,10 +40,15 @@ public class SaveToDownloadReceiver extends BroadcastReceiver {
             int notificationId = intent.getIntExtra(EXTRA_ID, -1);
             if (notificationId >= 0) {
                 var runnable = callbacks.get(notificationId);
-                if (runnable != null) {
-                    runnable.run();
+                try {
+                    if (runnable != null) {
+                        runnable.run();
+                    }
+                } catch (RuntimeException e) {
+                    FileLog.e(e);
+                } finally {
+                    cancelNotification(notificationId);
                 }
-                cancelNotification(notificationId);
             }
         }
     }
@@ -73,14 +79,25 @@ public class SaveToDownloadReceiver extends BroadcastReceiver {
                 .addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), pendingIntent);
         callbacks.put(notificationId, callback);
         builders.put(notificationId, builder);
-        getNotificationManager().notify(NOTIFICATION_TAG, notificationId, builder.build());
+        try {
+            getNotificationManager().notify(NOTIFICATION_TAG, notificationId, builder.build());
+        } catch (RuntimeException e) {
+            callbacks.remove(notificationId);
+            builders.remove(notificationId);
+            FileLog.e(e);
+        }
     }
 
     public static void updateNotification(int notificationId, int progress) {
         var builder = builders.get(notificationId);
         if (builder != null) {
             builder.setProgress(100, progress, false);
-            getNotificationManager().notify(NOTIFICATION_TAG, notificationId, builder.build());
+            try {
+                getNotificationManager().notify(NOTIFICATION_TAG, notificationId, builder.build());
+            } catch (RuntimeException e) {
+                FileLog.e(e);
+                cancelNotification(notificationId);
+            }
         } else {
             cancelNotification(notificationId);
         }
@@ -89,6 +106,10 @@ public class SaveToDownloadReceiver extends BroadcastReceiver {
     public static void cancelNotification(int notificationId) {
         callbacks.remove(notificationId);
         builders.remove(notificationId);
-        getNotificationManager().cancel(NOTIFICATION_TAG, notificationId);
+        try {
+            getNotificationManager().cancel(NOTIFICATION_TAG, notificationId);
+        } catch (RuntimeException e) {
+            FileLog.e(e);
+        }
     }
 }
