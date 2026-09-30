@@ -69,7 +69,7 @@ public class ChatActivityActionsButtonsLayout extends LinearLayout {
         ScaleStateListAnimator.apply(forwardButton.button, .065f, 2f);
 
         addTextView(replyButton, LocaleController.getString(R.string.Reply), R.drawable.input_reply, false);
-        addTextView(selectButton, LocaleController.getString(R.string.SelectionOrderButton), R.drawable.ic_selection_order, false);
+        addTextView(selectButton, LocaleController.getString(R.string.Select), R.drawable.ic_select_between, false);
         addTextView(forwardButton, LocaleController.getString(R.string.Forward), R.drawable.input_forward, true);
 
         setOrientation(HORIZONTAL);

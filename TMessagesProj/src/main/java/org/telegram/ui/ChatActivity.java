@@ -1690,6 +1690,7 @@ public class ChatActivity extends BaseFragment implements
     private final static int add_shortcut = 24;
     private final static int save_to = 25;
     private final static int save_gallery = 36;
+    private final static int selection_order = 37;
     private final static int auto_delete_timer = 26;
     private final static int change_colors = 27;
     private final static int tag_message = 28;
@@ -3991,6 +3992,8 @@ public class ChatActivity extends BaseFragment implements
                             BulletinFactory.of(ChatActivity.this).createDownloadBulletin(isMusic ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate).show();
                         }
                     });
+                } else if (id == selection_order) {
+                    showSelectionOrderPreview();
                 } else if (id == save_gallery) {
                     if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE) && getParentActivity() != null && getParentActivity().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                         pendingGallerySaveMessages = getSelectedGalleryMessages();
@@ -8334,7 +8337,7 @@ public class ChatActivity extends BaseFragment implements
         }
 
         actionsButtonsLayout = new ChatActivityActionsButtonsLayout(context, resourceProvider, blurredBackgroundColorProvider, glassBackgroundDrawableFactory);
-        actionsButtonsLayout.setSelectButtonOnClickListener(v -> showSelectionOrderPreview());
+        actionsButtonsLayout.setSelectButtonOnClickListener(v -> selectMessagesBetweenSelection());
         actionsButtonsLayout.setReplyButtonOnClickListener(v -> {
             MessageObject messageObject = null;
             for (int a = 1; a >= 0; a--) {
@@ -10607,6 +10610,7 @@ public class ChatActivity extends BaseFragment implements
             final boolean isSavedMessages = getDialogId() == getUserConfig().getClientUserId() && (chatMode == 0 || chatMode == MODE_SAVED);
             actionModeViews.add(actionMode.addItemWithWidth(save_to, R.drawable.msg_download, dp(48), LocaleController.getString(R.string.SaveToMusic)));
             actionModeViews.add(actionMode.addItemWithWidth(save_gallery, R.drawable.msg_gallery, dp(48), LocaleController.getString(R.string.SaveToGallery)));
+            actionModeViews.add(actionMode.addItemWithWidth(selection_order, R.drawable.ic_selection_order, dp(48), LocaleController.getString(R.string.SelectionOrderButton)));
             actionModeViews.add(actionMode.addItemWithWidth(edit, R.drawable.msg_edit, dp(48), LocaleController.getString(R.string.Edit)));
             if (isSavedMessages) {
                 actionModeViews.add(actionMode.addItemWithWidth(tag_message, R.drawable.menu_tag_edit, dp(48), LocaleController.getString(R.string.AccDescrTagMessage)));
@@ -10621,12 +10625,14 @@ public class ChatActivity extends BaseFragment implements
             actionModeViews.add(actionMode.addItemWithWidth(delete, R.drawable.msg_delete, dp(48), LocaleController.getString(R.string.Delete)));
         } else {
             actionModeViews.add(actionMode.addItemWithWidth(edit, R.drawable.msg_edit, dp(48), LocaleController.getString(R.string.Edit)));
+            actionModeViews.add(actionMode.addItemWithWidth(selection_order, R.drawable.ic_selection_order, dp(48), LocaleController.getString(R.string.SelectionOrderButton)));
             actionModeViews.add(actionMode.addItemWithWidth(star, R.drawable.msg_fave, dp(48), LocaleController.getString(R.string.AddToFavorites)));
             actionModeViews.add(actionMode.addItemWithWidth(copy, R.drawable.msg_copy, dp(48), LocaleController.getString(R.string.Copy)));
             actionModeViews.add(actionMode.addItemWithWidth(delete, R.drawable.msg_delete, dp(48), LocaleController.getString(R.string.Delete)));
         }
         actionMode.setItemVisibility(edit, canEditMessagesCount == 1 && selectedMessagesIds[0].size() + selectedMessagesIds[1].size() == 1 ? View.VISIBLE : View.GONE);
         actionMode.setItemVisibility(save_gallery, getSelectedGalleryMessages().isEmpty() ? View.GONE : View.VISIBLE);
+        actionMode.setItemVisibility(selection_order, selectedMessagesIds[0].size() + selectedMessagesIds[1].size() == 0 ? View.GONE : View.VISIBLE);
         actionMode.setItemVisibility(copy, !isPeerNoForwards() && selectedMessagesCanCopyIds[0].size() + selectedMessagesCanCopyIds[1].size() != 0 ? View.VISIBLE : View.GONE);
         actionMode.setItemVisibility(star, selectedMessagesCanStarIds[0].size() + selectedMessagesCanStarIds[1].size() != 0 ? View.VISIBLE : View.GONE);
         actionMode.setItemVisibility(delete, cantDeleteMessagesCount == 0 ? View.VISIBLE : View.GONE);
@@ -19639,6 +19645,62 @@ public class ChatActivity extends BaseFragment implements
         return result;
     }
 
+    private boolean canSelectMessagesBetweenSelection() {
+        if (selectedMessagesIds[0].size() + selectedMessagesIds[1].size() >= 100) {
+            return false;
+        }
+        for (int index = 0; index < selectedMessagesIds.length; index++) {
+            if (selectedMessagesIds[index].size() < 2) {
+                continue;
+            }
+            int begin = Integer.MAX_VALUE;
+            int end = Integer.MIN_VALUE;
+            for (int i = 0; i < selectedMessagesIds[index].size(); i++) {
+                int id = selectedMessagesIds[index].keyAt(i);
+                begin = Math.min(begin, id);
+                end = Math.max(end, id);
+            }
+            for (MessageObject message : messages) {
+                if ((message.getDialogId() == dialog_id ? 0 : 1) == index
+                        && message.getId() > begin && message.getId() < end
+                        && message.contentType == 0 && selectedMessagesIds[index].get(message.getId()) == null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void selectMessagesBetweenSelection() {
+        if (!canSelectMessagesBetweenSelection()) {
+            return;
+        }
+        for (int index = 0; index < selectedMessagesIds.length; index++) {
+            if (selectedMessagesIds[index].size() < 2) {
+                continue;
+            }
+            int begin = Integer.MAX_VALUE;
+            int end = Integer.MIN_VALUE;
+            for (int i = 0; i < selectedMessagesIds[index].size(); i++) {
+                int id = selectedMessagesIds[index].keyAt(i);
+                begin = Math.min(begin, id);
+                end = Math.max(end, id);
+            }
+            for (MessageObject message : messages) {
+                if (selectedMessagesIds[0].size() + selectedMessagesIds[1].size() >= 100) {
+                    break;
+                }
+                if ((message.getDialogId() == dialog_id ? 0 : 1) == index
+                        && message.getId() > begin && message.getId() < end
+                        && message.contentType == 0 && selectedMessagesIds[index].get(message.getId()) == null) {
+                    addToSelectedMessages(message, false);
+                }
+            }
+        }
+        updateActionModeTitle();
+        updateVisibleRows();
+    }
+
     private void showSelectionOrderPreview() {
         Activity activity = getParentActivity();
         ArrayList<MessageObject> orderedMessages = getSelectedMessagesInSelectionOrder();
@@ -20199,7 +20261,7 @@ public class ChatActivity extends BaseFragment implements
                 }
 
                 if (actionsButtonsLayout != null) {
-                    actionsButtonsLayout.showSelectButton(selectedMessagesIds[0].size() + selectedMessagesIds[1].size() > 0, true);
+                    actionsButtonsLayout.showSelectButton(canSelectMessagesBetweenSelection(), true);
                 }
 
                 if (editItem != null) {
