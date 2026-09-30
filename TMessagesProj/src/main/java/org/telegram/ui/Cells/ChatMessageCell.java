@@ -247,6 +247,7 @@ import org.telegram.ui.Stories.recorder.DominantColors;
 
 import tw.nekomimi.nekogram.NekoConfig;
 import tw.nekomimi.nekogram.accessibility.AccConfig;
+import tw.nekomimi.nekogram.helpers.MediaSizeBadgePolicy;
 import tw.nekomimi.nekogram.helpers.MessageFilterHelper;
 import tw.nekomimi.nekogram.helpers.MessageHelper;
 import tw.nekomimi.nekogram.helpers.WebpageHelper;
@@ -25065,17 +25066,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     animatingNoSoundProgress = playing ? 1.0f : 0.0f;
                 }
 
-                boolean fullWidth = true;
-                if (currentPosition != null) {
-                    int mask = MessageObject.POSITION_FLAG_LEFT | MessageObject.POSITION_FLAG_RIGHT;
-                    fullWidth = (currentPosition.flags & mask) == mask;
-                }
-                if (((documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO || documentAttachType == DOCUMENT_ATTACH_TYPE_GIF) && (buttonState == 1 || buttonState == 2 || buttonState == 0 || buttonState == 3 || buttonState == -1) || currentMessageObject.needDrawBluredPreview()) && !currentMessageObject.isRepostVideoPreview) {
+                boolean fullWidth = isFullWidthVideoMedia();
+                if (canDrawTelegramVideoInfoOverlay(fullWidth)) {
                     if (autoPlayingMedia) {
                         updatePlayingMessageProgress();
                     }
 
-                    if ((infoLayout != null || loadingProgressLayout != null) && (!forceNotDrawTime || autoPlayingMedia || drawVideoImageButton || animatingLoadingProgressProgress != 0 || (fullWidth && docTitleLayout != null) || (loadingProgressLayout != null && currentPosition != null && (buttonState == 1 || (buttonState == 3 && miniButtonState == 1)))) && (currentMessageObject != null && !currentMessageObject.sendPreview)) {
+                    {
                         boolean drawLoadingProgress;
                         float alpha = 0;
                         boolean drawDocTitleLayout;
@@ -25090,7 +25087,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                             if (currentMessageObject.type == MessageObject.TYPE_VIDEO || currentMessageObject.type == MessageObject.TYPE_GIF || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO) {
                                 alpha = currentMessageObject.needDrawBluredPreview() && docTitleLayout == null ? 0 : animatingDrawVideoImageButtonProgress;
                             }
-                            drawDocTitleLayout = alpha > 0 && docTitleLayout != null;
+                            drawDocTitleLayout = Boolean.TRUE.equals(isTelegramVideoBadgeVisible());
                             if (!drawDocTitleLayout && (drawLoadingProgress || infoLayout == null)) {
                                 loadingProgressAlpha = animatingLoadingProgressProgress;
                             }
@@ -29366,6 +29363,106 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         return currentMessageObject.hasValidGroupId() && MessageObject.isVideoDocument(document);
     }
 
+    private boolean shouldDrawMediaSizeBadge() {
+        if (currentMessageObject == null) {
+            return false;
+        }
+        boolean isPhoto = currentMessageObject.type == MessageObject.TYPE_PHOTO;
+        boolean isVideo = MessageObject.isVideoDocument(currentMessageObject.getDocument());
+        Boolean telegramBadgeVisible = isVideo ? isTelegramVideoBadgeVisible() : Boolean.FALSE;
+        return MediaSizeBadgePolicy.shouldDrawCustomMediaSizeBadge(
+                isPhoto,
+                isVideo,
+                currentMessageObject.hasValidGroupId(),
+                telegramBadgeVisible
+        );
+    }
+
+    private boolean isFullWidthVideoMedia() {
+        if (currentPosition == null) {
+            return true;
+        }
+        int mask = MessageObject.POSITION_FLAG_LEFT | MessageObject.POSITION_FLAG_RIGHT;
+        return (currentPosition.flags & mask) == mask;
+    }
+
+    /** Shared eligibility gate for Telegram's native duration/size overlay. */
+    private boolean canDrawTelegramVideoInfoOverlay(boolean fullWidth) {
+        if (currentMessageObject == null || currentMessageObject.isRepostVideoPreview || currentMessageObject.sendPreview) {
+            return false;
+        }
+        boolean videoOverlayState = ((documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO
+                || documentAttachType == DOCUMENT_ATTACH_TYPE_GIF)
+                && (buttonState == 1 || buttonState == 2 || buttonState == 0 || buttonState == 3 || buttonState == -1))
+                || currentMessageObject.needDrawBluredPreview();
+        if (!videoOverlayState || infoLayout == null && loadingProgressLayout == null) {
+            return false;
+        }
+        return !forceNotDrawTime || autoPlayingMedia || drawVideoImageButton
+                || animatingLoadingProgressProgress != 0
+                || fullWidth && docTitleLayout != null
+                || loadingProgressLayout != null && currentPosition != null
+                && (buttonState == 1 || buttonState == 3 && miniButtonState == 1);
+    }
+
+    /**
+     * Mirrors the video size line's actual draw path in onDraw. A null result means that
+     * the cell has not received enough layout state yet; the custom badge then fails closed.
+     */
+    @Nullable
+    private Boolean isTelegramVideoBadgeVisible() {
+        if (currentMessageObject == null || documentAttachType != DOCUMENT_ATTACH_TYPE_VIDEO) {
+            return false;
+        }
+        if (documentAttach == null || !photoImage.getVisible()
+                || photoImage.getImageWidth() <= 0 || photoImage.getImageHeight() <= 0
+                || currentMessageObject.hasValidGroupId() && currentPosition == null) {
+            return null;
+        }
+        if (currentMessageObject.isRepostPreview) {
+            return false;
+        }
+
+        boolean fullWidth = isFullWidthVideoMedia();
+        if (!canDrawTelegramVideoInfoOverlay(fullWidth)) {
+            return false;
+        }
+
+        boolean drawLoadingProgress;
+        boolean drawDocTitleLayout;
+        float alpha = 0;
+        float loadingProgressAlpha = 1f;
+        if (!fullWidth) {
+            drawLoadingProgress = true;
+            drawDocTitleLayout = false;
+            loadingProgressAlpha = animatingLoadingProgressProgress;
+        } else {
+            drawLoadingProgress = (buttonState == 1 || miniButtonState == 1
+                    || animatingLoadingProgressProgress != 0) && !currentMessageObject.isSecretMedia()
+                    && (documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO
+                    || documentAttachType == DOCUMENT_ATTACH_TYPE_GIF
+                    || documentAttachType == DOCUMENT_ATTACH_TYPE_DOCUMENT);
+            if (currentMessageObject.type == MessageObject.TYPE_VIDEO
+                    || currentMessageObject.type == MessageObject.TYPE_GIF
+                    || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO) {
+                alpha = currentMessageObject.needDrawBluredPreview() && docTitleLayout == null
+                        ? 0 : animatingDrawVideoImageButtonProgress;
+            }
+            drawDocTitleLayout = alpha > 0 && docTitleLayout != null;
+            if (!drawDocTitleLayout && (drawLoadingProgress || infoLayout == null)) {
+                loadingProgressAlpha = animatingLoadingProgressProgress;
+            }
+        }
+        loadingProgressAlpha *= (1f - isSmallImage());
+        if (drawPhotoImage && currentMessageObject.hasMediaSpoilers() && currentMessageObject.isSensitive()
+                && (!currentMessageObject.isMediaSpoilersRevealed
+                || mediaSpoilerRevealProgress != 0 && mediaSpoilerRevealProgress < 1)) {
+            loadingProgressAlpha *= mediaSpoilerRevealProgress;
+        }
+
+        return drawDocTitleLayout && loadingProgressAlpha > 0 && controlsAlpha > 0;
+    }
+
     private long getMediaSizeBadgeTotalSize() {
         if (mediaSizeBadgeTotalSize > 0) {
             return mediaSizeBadgeTotalSize;
@@ -29415,7 +29512,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     private void drawMediaSizeBadge(Canvas canvas) {
-        if (!isMediaSizeBadgeSupported() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(16) || photoImage.getImageHeight() <= dp(14)) {
+        if (!isMediaSizeBadgeSupported() || !shouldDrawMediaSizeBadge() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(16) || photoImage.getImageHeight() <= dp(14)) {
             return;
         }
         if (currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealed && mediaSpoilerRevealProgress < 1f) {
