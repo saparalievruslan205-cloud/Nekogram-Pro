@@ -1185,9 +1185,19 @@ public class FileLoader extends BaseController {
         } else {
             fileName = null;
         }
-        Runnable runnable = () -> loadFileInternal(document, secureDocument, webDocument, location, imageLocation, parentObject, locationExt, locationSize, priority, null, 0, false, cacheType);
-        if (cacheType != 10 && !TextUtils.isEmpty(fileName) && !fileName.contains("" + Integer.MIN_VALUE)) {
-            LoadOperationUIObject uiObject = new FileLoader.LoadOperationUIObject();
+        final LoadOperationUIObject uiObject = cacheType != 10 && !TextUtils.isEmpty(fileName) && !fileName.contains("" + Integer.MIN_VALUE)
+                ? new LoadOperationUIObject() : null;
+        Runnable runnable = () -> {
+            FileLoadOperation operation = null;
+            try {
+                operation = loadFileInternal(document, secureDocument, webDocument, location, imageLocation, parentObject, locationExt, locationSize, priority, null, 0, false, cacheType);
+            } finally {
+                if (operation == null && uiObject != null) {
+                    loadOperationPathsUI.remove(fileName, uiObject);
+                }
+            }
+        };
+        if (uiObject != null) {
             uiObject.loadInternalRunnable = runnable;
             loadOperationPathsUI.put(fileName, uiObject);
         }
