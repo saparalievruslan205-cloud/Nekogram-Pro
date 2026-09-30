@@ -231,6 +231,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     private MediaController.AlbumEntry galleryAlbumEntry;
     private ArrayList<MediaController.AlbumEntry> dropDownAlbums;
     private PagedGalleryIndex pagedGalleryIndex;
+    private PagedGalleryIndex.Listener pendingIndexListener;
     private PagedGalleryIndex.Album selectedPagedAlbum;
     private ArrayList<PagedGalleryIndex.Album> dropDownPagedAlbums;
     private ArrayList<MediaController.AlbumEntry> pagedAlbumEntries;
@@ -2732,10 +2733,17 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         if (parentAlert.destroyed || !reload && pagedGalleryIndex != null) {
             return;
         }
+        if (pendingIndexListener != null) {
+            PagedGalleryIndex.removeSharedListener(pendingIndexListener);
+            pendingIndexListener = null;
+        }
         final int generation = ++galleryIndexGeneration;
-        PagedGalleryIndex.requestShared(getContext(), new PagedGalleryIndex.Listener() {
+        pendingIndexListener = new PagedGalleryIndex.Listener() {
             @Override
             public void onIndexReady(PagedGalleryIndex index) {
+                if (pendingIndexListener == this) {
+                    pendingIndexListener = null;
+                }
                 if (generation != galleryIndexGeneration || parentAlert.destroyed) {
                     return;
                 }
@@ -2777,7 +2785,8 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
             @Override
             public void onPageReady() {
             }
-        });
+        };
+        PagedGalleryIndex.requestShared(getContext(), pendingIndexListener);
     }
 
     public void openPickedPhotoForSticker(ArrayList<SendMessagesHelper.SendingMediaInfo> media) {
@@ -3863,6 +3872,13 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
         ++galleryIndexGeneration;
+        if (pendingIndexListener != null) {
+            PagedGalleryIndex.removeSharedListener(pendingIndexListener);
+            pendingIndexListener = null;
+        }
+        if (pagedGalleryIndex != null) {
+            pagedGalleryIndex.removePageListener(pagedGalleryListener);
+        }
         if (pendingGalleryRefresh != null) {
             AndroidUtilities.cancelRunOnUIThread(pendingGalleryRefresh);
             pendingGalleryRefresh = null;

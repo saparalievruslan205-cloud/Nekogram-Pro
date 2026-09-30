@@ -11,6 +11,7 @@ import android.text.TextUtils;
 import android.util.SparseArray;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -63,7 +64,12 @@ public final class PagedGalleryIndex {
             return;
         }
         sharedDirty = true;
-        scheduleSharedRefresh(context.getApplicationContext());
+        // The next gallery request refreshes the shared index. Scanning the entire
+        // MediaStore after every save is costly when the picker is closed.
+    }
+
+    public static void removeSharedListener(Listener listener) {
+        waitingListeners.remove(listener);
     }
 
     private static void scheduleSharedRefresh(Context context) {
@@ -220,6 +226,7 @@ public final class PagedGalleryIndex {
         }
     };
     private final HashSet<String> inFlight = new HashSet<>();
+    private final HashMap<String, ArrayList<Listener>> pageListeners = new HashMap<>();
     private final HashSet<Integer> unavailable = new HashSet<>();
     private boolean closed;
 
@@ -431,14 +438,20 @@ public final class PagedGalleryIndex {
     }
 
     private void requestPage(Album album, int position, Listener listener) {
-        if (closed || position < 0 || position >= album.size() || inFlight.size() >= MAX_REQUESTS) {
+        if (closed || position < 0 || position >= album.size()) {
             return;
         }
         int start = position / PAGE_SIZE * PAGE_SIZE;
         String key = System.identityHashCode(album) + ":" + start;
-        if (!inFlight.add(key)) {
+        if (inFlight.contains(key)) {
+            addPageListener(key, listener);
             return;
         }
+        if (inFlight.size() >= MAX_REQUESTS) {
+            return;
+        }
+        inFlight.add(key);
+        addPageListener(key, listener);
         int end = Math.min(album.size(), start + PAGE_SIZE);
         int[] positions = new int[end - start];
         StringBuilder selection = new StringBuilder(MediaStore.Files.FileColumns._ID).append(" IN (");
@@ -489,6 +502,7 @@ public final class PagedGalleryIndex {
             }
             AndroidUtilities.runOnUIThread(() -> {
                 inFlight.remove(key);
+                ArrayList<Listener> listeners = pageListeners.remove(key);
                 if (closed) {
                     return;
                 }
@@ -500,16 +514,37 @@ public final class PagedGalleryIndex {
                         unavailable.add(global);
                     }
                 }
-                listener.onPageReady();
+                if (listeners != null) {
+                    for (Listener pageListener : listeners) {
+                        pageListener.onPageReady();
+                    }
+                }
             });
         }, "gallery-page");
         thread.start();
+    }
+
+    private void addPageListener(String key, Listener listener) {
+        if (listener == null) {
+            return;
+        }
+        ArrayList<Listener> listeners = pageListeners.computeIfAbsent(key, ignored -> new ArrayList<>());
+        if (!listeners.contains(listener)) {
+            listeners.add(listener);
+        }
+    }
+
+    public void removePageListener(Listener listener) {
+        for (ArrayList<Listener> listeners : pageListeners.values()) {
+            listeners.remove(listener);
+        }
     }
 
     public void close() {
         closed = true;
         cache.clear();
         inFlight.clear();
+        pageListeners.clear();
         unavailable.clear();
     }
 }
