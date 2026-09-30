@@ -153,18 +153,8 @@ public class ConfigHelper extends BaseRemoteHelper {
     }
 
     @Override
-    protected void onError(String text, Delegate delegate) {
-        FileLog.e("ConfigHelper error = " + text);
-    }
-
-    @Override
     protected String getRequestMethod() {
         return NEWS_METHOD;
-    }
-
-    @Override
-    protected String getRequestParams() {
-        return "";
     }
 
     public static class News {

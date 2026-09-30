@@ -19,7 +19,6 @@ import java.util.HashSet;
 import java.util.Set;
 
 import tw.nekomimi.nekogram.helpers.AnalyticsHelper;
-import tw.nekomimi.nekogram.helpers.CloudSettingsHelper;
 import tw.nekomimi.nekogram.helpers.LensHelper;
 import tw.nekomimi.nekogram.translator.Translator;
 import tw.nekomimi.nekogram.translator.TranslatorApps;
@@ -81,7 +80,6 @@ public class NekoConfig {
 
     public static boolean accentAsNotificationColor = false;
     public static boolean askBeforeCall = true;
-    public static boolean autoInlineBot = false;
     public static boolean autoPauseVideo = true;
     public static boolean autoTranslate = true;
     public static boolean bottomFilterTabs = false;
@@ -159,7 +157,6 @@ public class NekoConfig {
         map.put("key", key);
         AnalyticsHelper.trackEvent("neko_config_changed", map);
 
-        CloudSettingsHelper.getInstance().doAutoSync();
     };
     private static boolean configLoaded;
 
@@ -188,7 +185,6 @@ public class NekoConfig {
             stickerSize = preferences.getFloat("stickerSize", 14.0f);
             accentAsNotificationColor = preferences.getBoolean("accentAsNotificationColor", false);
             askBeforeCall = preferences.getBoolean("askBeforeCall", true);
-            autoInlineBot = preferences.getBoolean("autoInlineBot", false);
             autoPauseVideo = preferences.getBoolean("autoPauseVideo", true);
             autoTranslate = preferences.getBoolean("autoTranslate", true);
             bottomFilterTabs = preferences.getBoolean("bottomFilterTabs", false);
@@ -307,9 +303,6 @@ public class NekoConfig {
         }
         if (preferences.contains("askBeforeCall")) {
             object.addProperty("askBeforeCall", preferences.getBoolean("askBeforeCall", true));
-        }
-        if (preferences.contains("autoInlineBot")) {
-            object.addProperty("autoInlineBot", preferences.getBoolean("autoInlineBot", false));
         }
         if (preferences.contains("autoPauseVideo")) {
             object.addProperty("autoPauseVideo", preferences.getBoolean("autoPauseVideo", true));
@@ -567,9 +560,6 @@ public class NekoConfig {
         }
         if (object.has("askBeforeCall")) {
             editor.putBoolean("askBeforeCall", object.get("askBeforeCall").getAsBoolean());
-        }
-        if (object.has("autoInlineBot")) {
-            editor.putBoolean("autoInlineBot", object.get("autoInlineBot").getAsBoolean());
         }
         if (object.has("autoPauseVideo")) {
             editor.putBoolean("autoPauseVideo", object.get("autoPauseVideo").getAsBoolean());
@@ -858,10 +848,6 @@ public class NekoConfig {
         preferences.edit().putBoolean("askBeforeCall", askBeforeCall).apply();
     }
 
-    public static void toggleAutoInlineBot() {
-        autoInlineBot = !autoInlineBot;
-        preferences.edit().putBoolean("autoInlineBot", autoInlineBot).apply();
-    }
 
     public static void toggleAutoPauseVideo() {
         autoPauseVideo = !autoPauseVideo;

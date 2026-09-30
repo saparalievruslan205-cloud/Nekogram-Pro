@@ -1,35 +1,44 @@
 package tw.nekomimi.nekogram.helpers.remote;
 
 import android.content.pm.PackageInfo;
-import android.os.Build;
-import android.text.TextUtils;
-
-import com.google.gson.annotations.Expose;
-import com.google.gson.annotations.SerializedName;
 
 import org.telegram.messenger.ApplicationLoader;
-import org.telegram.messenger.BuildConfig;
+import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
 import org.telegram.tgnet.TLRPC;
 
-import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.stream.Collectors;
 
-public class UpdateHelper extends BaseRemoteHelper {
-    public static final String UPDATE_METHOD = "check_for_updates";
+public final class UpdateHelper {
 
-    /**
-     * @param date {long} - date in milliseconds
-     */
+    private static final UpdateHelper INSTANCE = new UpdateHelper();
+
+    private UpdateHelper() {
+    }
+
+    public static UpdateHelper getInstance() {
+        return INSTANCE;
+    }
+
+    /** Legacy update entry point retained for callers in Telegram core; Pro updates use GitHub. */
+    public void checkNewVersionAvailable(Delegate delegate) {
+        if (delegate != null) {
+            AndroidUtilities.runOnUIThread(() -> delegate.onTLResponse(null, null));
+        }
+    }
+
+    public interface Delegate {
+        void onTLResponse(TLRPC.TL_help_appUpdate response, String error);
+    }
+
     public static String formatDateUpdate(long date) {
         long epoch;
         try {
-            PackageInfo pInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
-            epoch = pInfo.lastUpdateTime;
+            PackageInfo packageInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
+            epoch = packageInfo.lastUpdateTime;
         } catch (Exception e) {
             epoch = 0;
         }
@@ -68,92 +77,5 @@ public class UpdateHelper extends BaseRemoteHelper {
             FileLog.e(e);
         }
         return "LOC_ERR";
-    }
-
-    private static final class InstanceHolder {
-        private static final UpdateHelper instance = new UpdateHelper();
-    }
-
-    public static UpdateHelper getInstance() {
-        return InstanceHolder.instance;
-    }
-
-    @Override
-    protected void onError(String text, Delegate delegate) {
-        delegate.onTLResponse(null, text);
-    }
-
-    @Override
-    protected String getRequestMethod() {
-        return UPDATE_METHOD;
-    }
-
-    @Override
-    protected String getRequestParams() {
-        return " " + TextUtils.join(",", Build.SUPPORTED_ABIS);
-    }
-
-    @Override
-    protected void onLoadSuccess(ArrayList<TLRPC.BotInlineResult> results, Delegate delegate) {
-        var map = results.stream()
-                .collect(Collectors.toMap(result -> result.id, result -> result));
-        var update_info = map.get("update_info");
-        if (update_info == null) {
-            delegate.onTLResponse(null, null);
-            return;
-        }
-        var update = new TLRPC.TL_help_appUpdate();
-        var json = GSON.fromJson(getTextFromInlineResult(update_info), Update.class);
-        if (json == null || json.versionCode <= BuildConfig.VERSION_CODE) {
-            delegate.onTLResponse(null, null);
-            return;
-        }
-        update.version = json.version;
-        update.can_not_skip = json.canNotSkip;
-        if (json.url != null) {
-            update.url = json.url;
-            update.flags |= 4;
-        }
-        var document = map.get("document");
-        if (document != null && document.document != null) {
-            update.document = document.document;
-            update.flags |= 2;
-        }
-        var message = map.get("message");
-        if (message != null && message.send_message != null) {
-            update.text = message.send_message.message;
-            update.entities = message.send_message.entities;
-            var entities = map.get("entities");
-            if (entities != null) {
-                var entities_json = GSON.fromJson(getTextFromInlineResult(entities), MessageEntity[].class);
-                update.entities.addAll(parseBotAPIEntities(entities_json, true));
-            }
-        }
-        var sticker = map.get("sticker");
-        if (sticker != null && sticker.document != null) {
-            update.sticker = sticker.document;
-            update.flags |= 8;
-        }
-        delegate.onTLResponse(update, null);
-    }
-
-    public void checkNewVersionAvailable(Delegate delegate) {
-        load(delegate);
-        ConfigHelper.getInstance().load();
-    }
-
-    public static class Update {
-        @SerializedName("can_not_skip")
-        @Expose
-        public Boolean canNotSkip;
-        @SerializedName("version")
-        @Expose
-        public String version;
-        @SerializedName("version_code")
-        @Expose
-        public Integer versionCode;
-        @SerializedName("url")
-        @Expose
-        public String url;
     }
 }
