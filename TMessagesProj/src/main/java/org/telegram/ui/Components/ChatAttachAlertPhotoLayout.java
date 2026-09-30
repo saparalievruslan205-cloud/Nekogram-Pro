@@ -2741,7 +2741,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         pendingIndexListener = new PagedGalleryIndex.Listener() {
             @Override
             public void onIndexReady(PagedGalleryIndex index) {
-                if (pendingIndexListener == this) {
+                if (pendingIndexListener == this && !PagedGalleryIndex.isSharedRefreshPending()) {
                     pendingIndexListener = null;
                 }
                 if (generation != galleryIndexGeneration || parentAlert.destroyed) {

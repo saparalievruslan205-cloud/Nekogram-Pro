@@ -72,6 +72,10 @@ public final class PagedGalleryIndex {
         waitingListeners.remove(listener);
     }
 
+    public static boolean isSharedRefreshPending() {
+        return sharedDirty || sharedSignal != null || pendingSharedRefresh != null;
+    }
+
     private static void scheduleSharedRefresh(Context context) {
         if (pendingSharedRefresh != null) {
             AndroidUtilities.cancelRunOnUIThread(pendingSharedRefresh);
