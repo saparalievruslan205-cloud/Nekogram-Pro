@@ -41,6 +41,9 @@ android {
 
     buildTypes {
         debug {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles '../TMessagesProj/proguard-rules.pro'
             if (localProperties.getProperty("storeFile") != null) {
                 signingConfig signingConfigs.sign
             }
