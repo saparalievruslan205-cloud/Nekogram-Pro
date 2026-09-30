@@ -1360,6 +1360,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     private BitmapDrawable currentPhotoObjectThumbStripped;
     private String currentPhotoFilter;
     private String currentPhotoFilterThumb;
+    private long mediaSizeBadgeLoadedSize;
+    private long mediaSizeBadgeTotalSize;
+    private boolean mediaSizeBadgeDownloading;
+    private final RectF mediaSizeBadgeRect = new RectF();
+    private final Paint mediaSizeBadgeBackgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint mediaSizeBadgeTextPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private Drawable foreverDrawable;
     private int foreverDrawableColor = 0xFFFFFFFF;
 
@@ -7033,6 +7039,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             captionAbove = currentMessageObject.messageOwner != null && currentMessageObject.messageOwner.invert_media || groupedMessages != null && groupedMessages.captionAbove;
             isSmallImage = false;
             lastLoadingSizeTotal = 0;
+            mediaSizeBadgeLoadedSize = 0;
+            mediaSizeBadgeTotalSize = 0;
+            mediaSizeBadgeDownloading = false;
             if (scheduledInvalidate) {
                 AndroidUtilities.cancelRunOnUIThread(invalidateRunnable);
                 scheduledInvalidate = false;
@@ -18097,11 +18106,20 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     @Override
     public void onFailedDownload(String fileName, boolean canceled) {
+        mediaSizeBadgeDownloading = false;
+        mediaSizeBadgeLoadedSize = 0;
         updateButtonState(true, documentAttachType == DOCUMENT_ATTACH_TYPE_AUDIO || documentAttachType == DOCUMENT_ATTACH_TYPE_MUSIC, false);
+        invalidate();
     }
 
     @Override
     public void onSuccessDownload(String fileName) {
+        if (isMediaSizeBadgeSupported()) {
+            mediaSizeBadgeDownloading = false;
+            if (mediaSizeBadgeTotalSize > 0) {
+                mediaSizeBadgeLoadedSize = mediaSizeBadgeTotalSize;
+            }
+        }
         if (documentAttachType == DOCUMENT_ATTACH_TYPE_STICKER && currentMessageObject.isDice()) {
             DownloadController.getInstance(currentAccount).removeLoadingFileObserver(this);
             setCurrentDiceValue(true);
@@ -18169,6 +18187,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
             }
         }
+        invalidate();
     }
 
     @Override
@@ -18274,6 +18293,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     @Override
     public void onProgressDownload(String fileName, long downloadedSize, long totalSize) {
+        if (isMediaSizeBadgeSupported()) {
+            mediaSizeBadgeDownloading = true;
+            mediaSizeBadgeLoadedSize = Math.max(0, downloadedSize);
+            if (totalSize > 0) {
+                mediaSizeBadgeTotalSize = totalSize;
+            }
+        }
         float progress = totalSize == 0 ? 0 : Math.min(1f, downloadedSize / (float) totalSize);
         currentMessageObject.loadedFileSize = downloadedSize;
         createLoadingProgressLayout(downloadedSize, totalSize);
@@ -18303,6 +18329,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
             }
         }
+        invalidate();
         if (currentFocusedVirtualView == -1 && AccConfig.announceFileProgress) sendAccessibilityEventForVirtualView(-1, AccessibilityEvent.TYPE_ANNOUNCEMENT, (int)(progress * 100) + "%");
     }
 
@@ -29292,11 +29319,111 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     photoImage.draw(canvas);
                     photoImage.setAlpha(wasAlpha);
                     photoImage.setForceNotMedia(false);
+                    drawMediaSizeBadge(canvas);
                     return r;
                 }
             }
         }
-        return photoImage.draw(canvas);
+        boolean drawn = photoImage.draw(canvas);
+        drawMediaSizeBadge(canvas);
+        return drawn;
+    }
+
+    private boolean isMediaSizeBadgeSupported() {
+        return currentMessageObject != null && (currentMessageObject.type == MessageObject.TYPE_PHOTO || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO);
+    }
+
+    private long getMediaSizeBadgeTotalSize() {
+        if (mediaSizeBadgeTotalSize > 0) {
+            return mediaSizeBadgeTotalSize;
+        }
+        if (currentMessageObject == null) {
+            return 0;
+        }
+        if (documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO && documentAttach != null && documentAttach.size > 0) {
+            return documentAttach.size;
+        }
+
+        TLRPC.MessageMedia media = MessageObject.getMedia(currentMessageObject.messageOwner);
+        if (media instanceof TLRPC.TL_messageMediaPhoto && media.photo != null && media.photo.sizes != null) {
+            long size = 0;
+            for (int i = 0; i < media.photo.sizes.size(); i++) {
+                TLRPC.PhotoSize photoSize = media.photo.sizes.get(i);
+                if (photoSize == null || photoSize instanceof TLRPC.TL_photoSizeEmpty || photoSize instanceof TLRPC.TL_photoStrippedSize || photoSize instanceof TLRPC.TL_photoPathSize) {
+                    continue;
+                }
+                if (photoSize.size > size) {
+                    size = photoSize.size;
+                }
+                if (photoSize.bytes != null && photoSize.bytes.length > size) {
+                    size = photoSize.bytes.length;
+                }
+            }
+            if (size > 0) {
+                return size;
+            }
+        }
+
+        try {
+            TLObject attach = documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO ? documentAttach : currentPhotoObject;
+            if (attach != null) {
+                File file = FileLoader.getInstance(currentAccount).getPathToAttach(attach);
+                if (file.isFile()) {
+                    long fileSize = file.length();
+                    if (fileSize > 0) {
+                        return fileSize;
+                    }
+                }
+            }
+        } catch (Exception ignore) {
+        }
+        return 0;
+    }
+
+    private void drawMediaSizeBadge(Canvas canvas) {
+        if (!isMediaSizeBadgeSupported() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(32) || photoImage.getImageHeight() <= dp(20)) {
+            return;
+        }
+        if (currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealed && mediaSpoilerRevealProgress < 1f) {
+            return;
+        }
+
+        long totalSize = getMediaSizeBadgeTotalSize();
+        long loadedSize = mediaSizeBadgeLoadedSize;
+        if (mediaSizeBadgeDownloading && totalSize > 0) {
+            loadedSize = Math.min(Math.max(0, loadedSize), totalSize);
+        }
+        if (mediaSizeBadgeDownloading && loadedSize > 0) {
+            String progress = totalSize > 0
+                    ? String.format(Locale.US, "%s / %s · %d%%", AndroidUtilities.formatFileSize(loadedSize), AndroidUtilities.formatFileSize(totalSize), (int) Math.min(100, loadedSize * 100.0 / totalSize))
+                    : AndroidUtilities.formatFileSize(loadedSize);
+            drawMediaSizeBadgeText(canvas, progress);
+        } else if (totalSize > 0) {
+            drawMediaSizeBadgeText(canvas, AndroidUtilities.formatFileSize(totalSize));
+        }
+    }
+
+    private void drawMediaSizeBadgeText(Canvas canvas, String text) {
+        mediaSizeBadgeTextPaint.setColor(Color.WHITE);
+        mediaSizeBadgeTextPaint.setTextSize(dp(11));
+        mediaSizeBadgeTextPaint.setFakeBoldText(true);
+        float paddingX = dp(6);
+        float availableTextWidth = Math.max(dp(24), photoImage.getImageWidth() - dp(16) - paddingX * 2);
+        CharSequence displayText = TextUtils.ellipsize(text, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
+        float textWidth = mediaSizeBadgeTextPaint.measureText(displayText, 0, displayText.length());
+        float height = dp(20);
+        float right = photoImage.getImageX2() - dp(6);
+        float top = photoImage.getImageY() + dp(6);
+        float left = right - textWidth - paddingX * 2;
+        mediaSizeBadgeRect.set(left, top, right, top + height);
+
+        mediaSizeBadgeBackgroundPaint.setColor(0xB8000000);
+        mediaSizeBadgeBackgroundPaint.setAlpha(0xB8);
+        mediaSizeBadgeTextPaint.setAlpha(255);
+        canvas.drawRoundRect(mediaSizeBadgeRect, dp(6), dp(6), mediaSizeBadgeBackgroundPaint);
+        Paint.FontMetrics fontMetrics = mediaSizeBadgeTextPaint.getFontMetrics();
+        float baseline = mediaSizeBadgeRect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f;
+        canvas.drawText(displayText, 0, displayText.length(), left + paddingX, baseline, mediaSizeBadgeTextPaint);
     }
 
     public boolean areTags() {
