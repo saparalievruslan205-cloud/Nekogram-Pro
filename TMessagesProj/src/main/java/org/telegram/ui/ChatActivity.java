@@ -19830,7 +19830,23 @@ public class ChatActivity extends BaseFragment implements
             int resultId = cancelled ? R.string.GalleryBatchSaveCancelled : R.string.GalleryBatchSaveSummary;
             CharSequence result = LocaleController.formatString(resultId, saved, failed);
             BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.drawable.msg_gallery, result, "").show();
-        });
+        }, this::updateGallerySaveProgress);
+    }
+
+    private void updateGallerySaveProgress(MessageObject messageObject, long loadedSize, long totalSize, boolean active) {
+        if (chatListView == null || messageObject == null) {
+            return;
+        }
+        for (int i = 0; i < chatListView.getChildCount(); i++) {
+            View child = chatListView.getChildAt(i);
+            if (child instanceof ChatMessageCell) {
+                ChatMessageCell cell = (ChatMessageCell) child;
+                MessageObject cellMessage = cell.getMessageObject();
+                if (cellMessage != null && cellMessage.getDialogId() == messageObject.getDialogId() && cellMessage.getId() == messageObject.getId()) {
+                    cell.setGallerySaveProgress(loadedSize, totalSize, active);
+                }
+            }
+        }
     }
 
     private void updateSelectionOrderBadges() {

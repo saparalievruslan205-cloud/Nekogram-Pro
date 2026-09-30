@@ -1115,6 +1115,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     private RadialProgress2 radialProgress;
     private RadialProgress2 videoRadialProgress;
+    private RadialProgress2 gallerySaveProgressRadial;
+    private boolean gallerySaveProgressVisible;
     private boolean drawRadialCheckBackground;
     private int[] pollPhotoImageRadius = new int[4];
     private ImageReceiver photoImage;
@@ -1983,6 +1985,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         videoRadialProgress = new RadialProgress2(this, resourcesProvider);
         videoRadialProgress.setDrawBackground(false);
         videoRadialProgress.setCircleRadius(dp(15));
+        gallerySaveProgressRadial = new RadialProgress2(this, resourcesProvider);
+        gallerySaveProgressRadial.setCircleRadius(dp(18));
+        gallerySaveProgressRadial.setColors(0xB0000000, 0xB0000000, Color.WHITE, Color.WHITE);
+        gallerySaveProgressRadial.setProgressColor(Color.WHITE);
+        gallerySaveProgressRadial.setIcon(MediaActionDrawable.ICON_DOWNLOAD, false, false);
         seekBar = new SeekBar(this) {
             @Override
             protected void onTimestampUpdate(URLSpanNoUnderline link) {
@@ -7042,6 +7049,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             mediaSizeBadgeLoadedSize = 0;
             mediaSizeBadgeTotalSize = 0;
             mediaSizeBadgeDownloading = false;
+            gallerySaveProgressVisible = false;
             if (scheduledInvalidate) {
                 AndroidUtilities.cancelRunOnUIThread(invalidateRunnable);
                 scheduledInvalidate = false;
@@ -18445,6 +18453,17 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         delegate = chatMessageCellDelegate;
     }
 
+    public void setGallerySaveProgress(long loadedSize, long totalSize, boolean active) {
+        gallerySaveProgressVisible = active;
+        if (active) {
+            float progress = totalSize > 0 ? Math.min(1f, Math.max(0, loadedSize) / (float) totalSize) : 0f;
+            gallerySaveProgressRadial.setProgress(progress, true);
+        } else {
+            gallerySaveProgressRadial.setProgress(0f, false);
+        }
+        invalidate();
+    }
+
     public ChatMessageCellDelegate getDelegate() {
         return delegate;
     }
@@ -26215,6 +26234,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             videoRadialProgress.setOverrideAlpha(alpha);
             videoRadialProgress.draw(canvas);
         }
+        if (gallerySaveProgressVisible && photoImage.getVisible() && photoImage.getImageWidth() > 0 && photoImage.getImageHeight() > dp(36)) {
+            int size = dp(40);
+            float centerX = photoImage.getCenterX();
+            float centerY = photoImage.getImageY2() - dp(30);
+            gallerySaveProgressRadial.setProgressRect(centerX - size / 2f, centerY - size / 2f, centerX + size / 2f, centerY + size / 2f);
+            gallerySaveProgressRadial.draw(canvas);
+        }
         if (drawMediaCheckBox) {
             if (documentAttachType == DOCUMENT_ATTACH_TYPE_MUSIC || documentAttachType == DOCUMENT_ATTACH_TYPE_DOCUMENT && !drawPhotoImage) {
                 int size = dp(20);
@@ -29330,7 +29356,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     private boolean isMediaSizeBadgeSupported() {
-        return currentMessageObject != null && (currentMessageObject.type == MessageObject.TYPE_PHOTO || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO);
+        if (currentMessageObject == null) {
+            return false;
+        }
+        if (currentMessageObject.type == MessageObject.TYPE_PHOTO) {
+            return true;
+        }
+        return documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO && currentMessagesGroup != null && currentMessageObject.hasValidGroupId();
     }
 
     private long getMediaSizeBadgeTotalSize() {
@@ -29412,13 +29444,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         CharSequence displayText = TextUtils.ellipsize(text, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
         float textWidth = mediaSizeBadgeTextPaint.measureText(displayText, 0, displayText.length());
         float height = dp(20);
-        float right = photoImage.getImageX2() - dp(6);
+        float left = photoImage.getImageX() + dp(6);
         float top = photoImage.getImageY() + dp(6);
-        float left = right - textWidth - paddingX * 2;
+        float right = left + textWidth + paddingX * 2;
         mediaSizeBadgeRect.set(left, top, right, top + height);
 
         mediaSizeBadgeBackgroundPaint.setColor(0xB8000000);
-        mediaSizeBadgeBackgroundPaint.setAlpha(0xB8);
+        mediaSizeBadgeBackgroundPaint.setAlpha(0x70);
         mediaSizeBadgeTextPaint.setAlpha(255);
         canvas.drawRoundRect(mediaSizeBadgeRect, dp(6), dp(6), mediaSizeBadgeBackgroundPaint);
         Paint.FontMetrics fontMetrics = mediaSizeBadgeTextPaint.getFontMetrics();
