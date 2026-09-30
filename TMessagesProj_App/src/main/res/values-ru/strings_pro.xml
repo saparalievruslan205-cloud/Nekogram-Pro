@@ -3,4 +3,10 @@
     <string name="ProUpdateAvailable">Доступно обновление Nekogram Pro %1$s.</string>
     <string name="ProUpdateDownload">Скачать обновление</string>
     <string name="ProUpdateLater">Позже</string>
+    <string name="ProUpdateDownloading">Загрузка обновления…</string>
+    <string name="ProUpdateProgress">Загружено: %1$s / %2$s (%3$d%%)</string>
+    <string name="ProUpdateProgressUnknown">Загружено: %1$s</string>
+    <string name="ProUpdateDownloadFailed">Не удалось скачать или открыть обновление. Попробуйте ещё раз.</string>
+    <string name="ProUpdateCancel">Отменить загрузку</string>
+    <string name="ProUpdateOK">ОК</string>
 </resources>

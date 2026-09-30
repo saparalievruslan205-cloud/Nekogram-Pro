@@ -3,4 +3,10 @@
     <string name="ProUpdateAvailable">Nekogram Pro %1$s is available.</string>
     <string name="ProUpdateDownload">Download update</string>
     <string name="ProUpdateLater">Later</string>
+    <string name="ProUpdateDownloading">Downloading update…</string>
+    <string name="ProUpdateProgress">Downloading: %1$s / %2$s (%3$d%%)</string>
+    <string name="ProUpdateProgressUnknown">Downloading: %1$s</string>
+    <string name="ProUpdateDownloadFailed">Could not download or open the update. Please try again.</string>
+    <string name="ProUpdateCancel">Cancel download</string>
+    <string name="ProUpdateOK">OK</string>
 </resources>

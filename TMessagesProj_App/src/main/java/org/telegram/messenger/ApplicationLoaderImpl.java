@@ -7,7 +7,6 @@ import android.view.ViewGroup;
 import org.telegram.messenger.regular.BuildConfig;
 import org.telegram.messenger.regular.R;
 import org.telegram.tgnet.TLRPC;
-import org.telegram.messenger.browser.Browser;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.Components.UpdateAppAlertDialog;
 import org.telegram.ui.Components.UpdateLayout;
@@ -55,7 +54,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
-        if (!(update instanceof ProUpdateManager.ProUpdate)) {
+        if (!(update instanceof ProUpdateManager.ProUpdate) || !(context instanceof Activity)) {
             return false;
         }
         ProUpdateManager.ProUpdate proUpdate = (ProUpdateManager.ProUpdate) update;
@@ -67,7 +66,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                 .setTitle(context.getString(R.string.Nekogram))
                 .setMessage(message)
                 .setPositiveButton(context.getString(R.string.ProUpdateDownload),
-                        (dialog, which) -> Browser.openUrlInSystemBrowser(context, proUpdate.downloadUrl))
+                        (dialog, which) -> ProUpdateDownloader.show((Activity) context, proUpdate))
                 .setNegativeButton(context.getString(R.string.ProUpdateLater), null)
                 .show();
         return true;
