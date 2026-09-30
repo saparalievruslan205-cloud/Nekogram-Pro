@@ -22,39 +22,32 @@ public class RegDateHelper {
     }
 
     public static void getRegDate(long userId, BiConsumer<Integer, String> callback) {
-        InlineBotHelper.queryText("get_regdate " + userId, (result, error) -> {
-            if (error != null) {
-                callback.accept(0, error);
-                return;
-            }
-            int date;
-            try {
-                date = Integer.parseInt(result);
-            } catch (NumberFormatException e) {
-                callback.accept(0, "INVALID_RESULT");
-                return;
-            }
-            regDates.put(userId, date);
-            callback.accept(date, null);
-        });
+        Integer date = regDates.get(userId);
+        if (callback != null) {
+            callback.accept(date, date == null ? LocaleController.getString(R.string.UnknownError) : null);
+        }
     }
 
     public static void setRegDate(long dialogId, TLRPC.PeerSettings settings) {
         if (settings == null || settings.registration_month == null) {
             return;
         }
-        InlineBotHelper.queryText(String.format("set_regdate %s %s %s", dialogId, settings.registration_month, settings.phone_country), (result, error) -> {
-            if (error != null) {
-                FileLog.e("Failed to set reg date: " + error);
+        String[] parts = settings.registration_month.split("\\.");
+        if (parts.length != 2) {
+            return;
+        }
+        try {
+            int month = Integer.parseInt(parts[0]);
+            int year = Integer.parseInt(parts[1]);
+            if (month < 1 || month > 12) {
+                return;
             }
-        });
-        var parts = settings.registration_month.split("\\.");
-        if (parts.length != 2) return;
-        var month = Integer.parseInt(parts[0]);
-        var year = Integer.parseInt(parts[1]);
-        var calendar = Calendar.getInstance();
-        calendar.set(year, month - 1, 2, 0, 0, 0);
-        calendar.set(Calendar.MILLISECOND, 0);
-        regDates.put(dialogId, (int) (calendar.getTimeInMillis() / 1000L));
+            Calendar calendar = Calendar.getInstance();
+            calendar.set(year, month - 1, 2, 0, 0, 0);
+            calendar.set(Calendar.MILLISECOND, 0);
+            regDates.put(dialogId, (int) (calendar.getTimeInMillis() / 1000L));
+        } catch (NumberFormatException e) {
+            FileLog.e(e);
+        }
     }
 }
