@@ -16,6 +16,7 @@ import android.util.SparseIntArray;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -55,8 +56,29 @@ public final class PagedGalleryIndex {
         ContentResolver resolver = context.getContentResolver();
         mediaStoreObserver = new ContentObserver(new Handler(context.getMainLooper())) {
             @Override
+            public void onChange(boolean selfChange) {
+                onGalleryChanged(context, null);
+            }
+
+            @Override
             public void onChange(boolean selfChange, Uri uri) {
                 onGalleryChanged(context, uri);
+            }
+
+            @Override
+            public void onChange(boolean selfChange, Uri uri, int flags) {
+                onGalleryChanged(context, uri);
+            }
+
+            @Override
+            public void onChange(boolean selfChange, Collection<Uri> uris, int flags) {
+                if (uris == null || uris.isEmpty()) {
+                    onGalleryChanged(context, null);
+                    return;
+                }
+                for (Uri uri : uris) {
+                    onGalleryChanged(context, uri);
+                }
             }
         };
         try {
