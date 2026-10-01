@@ -57,6 +57,7 @@ android {
             minifyEnabled true
             shrinkResources true
             vcsInfo.include false
+            applicationIdSuffix ".beta"
             if (localProperties.getProperty("storeFile") != null) {
                 signingConfig signingConfigs.sign
             } else {
@@ -105,7 +106,7 @@ androidComponents {
             def abi = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
             def abiName = abi ?: "universal"
             def baseVersionCode = output.versionCode.get()
-            def isPro = variant.buildType == "debug"
+            def isPro = variant.buildType == "debug" || variant.buildType == "release"
             def versionCode = isPro ? baseVersionCode * 1000 + Integer.parseInt(PRO_REVISION) : baseVersionCode * 10
             output.outputFileName.set("${isPro ? 'Nekogram-Pro' : 'Nekogram'}-${output.versionName.get()}-${versionCode}-${abiName}.apk")
             output.versionCode.set(versionCode)
