@@ -235,6 +235,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     private PagedGalleryIndex.Album selectedPagedAlbum;
     private ArrayList<PagedGalleryIndex.Album> dropDownPagedAlbums;
     private ArrayList<MediaController.AlbumEntry> pagedAlbumEntries;
+    private ArrayList<AlbumButton> pagedAlbumButtons;
     private int galleryIndexGeneration;
     private Runnable pendingGalleryRefresh;
     private int viewerWindowStart;
@@ -823,6 +824,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         this.needCamera = needCamera;
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryItemChanged);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.cameraInitied);
         FrameLayout container = alert.getContainer();
         showAvatarConstructor = parentAlert.avatarPicker != 0;
@@ -2028,6 +2030,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
 
     private void updateAlbumsDropDown() {
         dropDownContainer.removeAllSubItems();
+        pagedAlbumButtons = new ArrayList<>();
         if (mediaEnabled) {
             ArrayList<MediaController.AlbumEntry> albums;
             if (pagedGalleryIndex != null && pagedAlbumEntries != null) {
@@ -2067,6 +2070,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                 int count = pagedGalleryIndex != null && dropDownPagedAlbums != null && a < dropDownPagedAlbums.size()
                         ? dropDownPagedAlbums.get(a).size() : album.photos.size();
                 AlbumButton btn = new AlbumButton(getContext(), album.coverPhoto, album.bucketName, count, resourcesProvider);
+                pagedAlbumButtons.add(btn);
                 dropDownContainer.getPopupLayout().addView(btn);
                 final int i = a + 20;
                 btn.setOnClickListener(v -> {
@@ -3871,6 +3875,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.cameraInitied);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryItemChanged);
         ++galleryIndexGeneration;
         if (pendingIndexListener != null) {
             PagedGalleryIndex.removeSharedListener(pendingIndexListener);
@@ -4503,6 +4508,49 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.pagedGalleryItemChanged) {
+            if (pagedGalleryIndex == null || parentAlert.destroyed || args.length < 2 || !(args[0] instanceof MediaController.PhotoEntry)) {
+                return;
+            }
+            MediaController.PhotoEntry entry = (MediaController.PhotoEntry) args[0];
+            boolean inserted = (Boolean) args[1];
+            if (dropDownPagedAlbums != null && pagedAlbumButtons != null && dropDownPagedAlbums.size() != pagedAlbumButtons.size()) {
+                pagedAlbumEntries = new ArrayList<>(dropDownPagedAlbums.size());
+                for (PagedGalleryIndex.Album album : dropDownPagedAlbums) {
+                    MediaController.AlbumEntry albumEntry = new MediaController.AlbumEntry(album.bucketId, album.name, album.coverPhoto);
+                    albumEntry.videoOnly = album.videoOnly;
+                    pagedAlbumEntries.add(albumEntry);
+                }
+                if (!pagedAlbumEntries.isEmpty()) {
+                    galleryAlbumEntry = pagedAlbumEntries.get(0);
+                }
+                updateAlbumsDropDown();
+            } else if (pagedAlbumButtons != null && dropDownPagedAlbums != null) {
+                for (int i = 0; i < dropDownPagedAlbums.size() && i < pagedAlbumButtons.size(); i++) {
+                    PagedGalleryIndex.Album album = dropDownPagedAlbums.get(i);
+                    if (album == pagedGalleryIndex.getAllMedia() || entry.isVideo && album == pagedGalleryIndex.getAllVideos() || !entry.isVideo && album == pagedGalleryIndex.getAllPhotos() || album.bucketId != 0 && album.bucketId == entry.bucketId) {
+                        pagedAlbumButtons.get(i).setAlbum(album.coverPhoto, album.size());
+                    }
+                }
+            }
+            boolean selectedAlbumMatches = selectedPagedAlbum == pagedGalleryIndex.getAllMedia() ||
+                    !entry.isVideo && selectedPagedAlbum == pagedGalleryIndex.getAllPhotos() ||
+                    entry.isVideo && selectedPagedAlbum == pagedGalleryIndex.getAllVideos() ||
+                    selectedPagedAlbum != null && !selectedPagedAlbum.videoOnly && selectedPagedAlbum.bucketId == entry.bucketId;
+            if (selectedAlbumMatches && adapter != null && !noGalleryPermissions) {
+                int itemPosition = pagedGalleryIndex.findPosition(selectedPagedAlbum, entry);
+                if (itemPosition >= 0) {
+                    adapter.notifyGalleryEntry(itemPosition, inserted);
+                    if (inserted) {
+                        gridView.post(this::requestVisibleGalleryPages);
+                    }
+                    if (cameraAttachAdapter != null) {
+                        cameraAttachAdapter.notifyGalleryEntry(itemPosition, inserted);
+                    }
+                }
+            }
+            return;
+        }
         if (id == NotificationCenter.pagedGalleryIndexDidLoad) {
             if (pagedGalleryIndex != null && !parentAlert.destroyed) {
                 loadPagedGalleryIndex(true);
@@ -4511,16 +4559,6 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         }
         if (id == NotificationCenter.albumsDidLoad) {
             if (pagedGalleryIndex != null) {
-                if (pendingGalleryRefresh != null) {
-                    AndroidUtilities.cancelRunOnUIThread(pendingGalleryRefresh);
-                }
-                pendingGalleryRefresh = () -> {
-                    pendingGalleryRefresh = null;
-                    if (!parentAlert.destroyed) {
-                        loadPagedGalleryIndex(true);
-                    }
-                };
-                AndroidUtilities.runOnUIThread(pendingGalleryRefresh, 15000);
                 return;
             }
             if (adapter != null) {
@@ -4582,6 +4620,52 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         public PhotoAttachAdapter(Context context, boolean camera) {
             mContext = context;
             needCamera = camera;
+            setHasStableIds(true);
+        }
+
+        public void notifyGalleryEntry(int albumPosition, boolean inserted) {
+            getItemCount();
+            int adapterPosition = photosStartRow + cameraPhotos.size() + albumPosition;
+            if (hasCameraSpaceRow && adapterPosition - photosStartRow >= itemsPerRow) {
+                adapterPosition++;
+            }
+            if (inserted) {
+                notifyItemInserted(adapterPosition);
+            } else {
+                notifyItemChanged(adapterPosition);
+            }
+        }
+
+        @Override
+        public long getItemId(int position) {
+            if (getItemViewType(position) != 0) {
+                return position;
+            }
+            int photoPosition = position;
+            if (hasCameraSpaceRow && photoPosition > itemsPerRow) {
+                photoPosition--;
+            }
+            if (needCamera && selectedAlbumEntry == galleryAlbumEntry) {
+                photoPosition--;
+            }
+            if (showAvatarConstructor) {
+                photoPosition--;
+            }
+            if (photoPosition < 0) {
+                return position;
+            }
+            MediaController.PhotoEntry entry = getPhotoEntryAtPosition(photoPosition);
+            if (entry == null) {
+                return position;
+            }
+            String stableKey = entry.mediaStoreUri != null ? entry.mediaStoreUri.toString() :
+                    (entry.isVideo ? "video:" : "image:") + entry.imageId + ':' + entry.path;
+            long hash = 0xcbf29ce484222325L;
+            for (int i = 0; i < stableKey.length(); i++) {
+                hash ^= stableKey.charAt(i);
+                hash *= 0x100000001b3L;
+            }
+            return hash | Long.MIN_VALUE;
         }
 
         public void createCache() {

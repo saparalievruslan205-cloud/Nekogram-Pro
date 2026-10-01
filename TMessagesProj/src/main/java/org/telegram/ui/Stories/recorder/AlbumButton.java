@@ -28,12 +28,14 @@ import org.telegram.ui.Components.CombinedDrawable;
 
 public class AlbumButton extends View {
     private final ImageReceiver imageReceiver = new ImageReceiver(this);
-    private final CharSequence title, subtitle;
-    private final MediaController.PhotoEntry cover;
+    private final CharSequence title;
+    private CharSequence subtitle;
+    private MediaController.PhotoEntry cover;
     private final Drawable noGalleryDrawable;
     private final String coverFilter;
     private final Rect visibleRect = new Rect();
     private boolean coverRequested;
+    private int coverRetryCount;
 
     private final TextPaint namePaintLayout = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private StaticLayout nameLayout;
@@ -70,6 +72,17 @@ public class AlbumButton extends View {
         this.cover = cover;
         coverFilter = imageSize + "_" + imageSize;
         imageReceiver.setImageBitmap(noGalleryDrawable);
+        imageReceiver.setDelegate((receiver, set, thumb, memCache) -> {
+            if (!set && coverRequested && cover != null && coverRetryCount < 2 && isAttachedToWindow()) {
+                coverRetryCount++;
+                postDelayed(() -> {
+                    if (cover != null && isAttachedToWindow()) {
+                        coverRequested = false;
+                        requestCoverIfVisible();
+                    }
+                }, 450L * coverRetryCount);
+            }
+        });
 
         setContentDescription(title + (count > 0 ? " " + LocaleController.formatPluralStringComma("Media", count) : ""));
     }
@@ -79,7 +92,9 @@ public class AlbumButton extends View {
             return;
         }
         coverRequested = true;
-        if (cover != null && cover.thumbPath != null) {
+        if (cover != null && cover.mediaStoreUri != null && cover.path != null) {
+            imageReceiver.setImage(ImageLocation.getForMediaStore(cover.mediaStoreUri, cover.imageId, cover.path, cover.isVideo), coverFilter, null, null, noGalleryDrawable, null, 0);
+        } else if (cover != null && cover.thumbPath != null) {
             imageReceiver.setImage(ImageLocation.getForPath(cover.thumbPath), coverFilter, null, null, noGalleryDrawable, null, 0);
         } else if (cover != null && cover.path != null) {
             if (cover.isVideo) {
@@ -88,6 +103,30 @@ public class AlbumButton extends View {
                 imageReceiver.setImage(ImageLocation.getForPath("thumb://" + cover.imageId + ":" + cover.path), coverFilter, null, null, noGalleryDrawable, null, 0);
             }
         }
+    }
+
+    public void setCover(MediaController.PhotoEntry cover) {
+        if (this.cover == cover) {
+            return;
+        }
+        this.cover = cover;
+        coverRequested = false;
+        coverRetryCount = 0;
+        imageReceiver.setImageBitmap(noGalleryDrawable);
+        if (isAttachedToWindow()) {
+            requestCoverIfVisible();
+        }
+        invalidate();
+    }
+
+    public void setAlbum(MediaController.PhotoEntry cover, int count) {
+        boolean countChanged = !TextUtils.equals(subtitle, String.valueOf(count));
+        subtitle = String.valueOf(count);
+        if (countChanged) {
+            countLayout = null;
+            requestLayout();
+        }
+        setCover(cover);
     }
 
     @Override
@@ -115,7 +154,7 @@ public class AlbumButton extends View {
     }
 
     private void updateLayouts(int widthAvailable) {
-        if (nameLayout == null || nameLayout.getWidth() != widthAvailable) {
+        if (nameLayout == null || countLayout == null || nameLayout.getWidth() != widthAvailable) {
             CharSequence title = TextUtils.ellipsize(this.title, namePaintLayout, widthAvailable, TextUtils.TruncateAt.END);
             nameLayout = new StaticLayout(title, namePaintLayout, Math.max(0, widthAvailable), Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false);
             nameLayoutLeft = nameLayout.getLineCount() > 0 ? nameLayout.getLineLeft(0) : 0;

@@ -610,6 +610,8 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         public int height;
         public long size;
         public String path;
+        public Uri mediaStoreUri;
+        public String bucketName;
         public int orientation;
         public int invert;
         public boolean isMuted;
@@ -1544,27 +1546,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 MediaStore.Images.ImageColumns.HEIGHT
         };
 
-        ContentResolver contentResolver = ApplicationLoader.applicationContext.getContentResolver();
-        try {
-            contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, new GalleryObserverExternal());
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        try {
-            contentResolver.registerContentObserver(MediaStore.Images.Media.INTERNAL_CONTENT_URI, true, new GalleryObserverInternal());
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        try {
-            contentResolver.registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, new GalleryObserverExternal());
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        try {
-            contentResolver.registerContentObserver(MediaStore.Video.Media.INTERNAL_CONTENT_URI, true, new GalleryObserverInternal());
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
+        PagedGalleryIndex.warmUp(ApplicationLoader.applicationContext);
     }
 
     @Override
@@ -6529,6 +6511,96 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             galleryLoadInProgress = true;
         }
         startGalleryPhotosAlbumsLoad(guid);
+    }
+
+    private static int findBucketAlbum(ArrayList<AlbumEntry> albums, int bucketId, boolean videoOnly) {
+        for (int i = 0; i < albums.size(); i++) {
+            AlbumEntry album = albums.get(i);
+            if (album.bucketId == bucketId && album.videoOnly == videoOnly) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static void addOrUpdateGalleryEntry(ArrayList<AlbumEntry> albums, AlbumEntry allAlbum, int bucketId, String bucketName, PhotoEntry entry, boolean videoOnly, int maxEntries) {
+        if (allAlbum != null) {
+            insertGalleryEntry(allAlbum, entry);
+            trimGalleryEntry(allAlbum, maxEntries);
+        }
+        if (bucketId == 0) {
+            return;
+        }
+        int index = findBucketAlbum(albums, bucketId, videoOnly);
+        AlbumEntry bucket;
+        if (index >= 0) {
+            bucket = albums.get(index);
+        } else {
+            bucket = new AlbumEntry(bucketId, bucketName, entry);
+            bucket.videoOnly = videoOnly;
+            index = 0;
+            while (index < albums.size() && albums.get(index).bucketId == 0) {
+                index++;
+            }
+            albums.add(index, bucket);
+        }
+        insertGalleryEntry(bucket, entry);
+        trimGalleryEntry(bucket, maxEntries);
+    }
+
+    private static void trimGalleryEntry(AlbumEntry album, int maxEntries) {
+        while (album.photos.size() > maxEntries) {
+            PhotoEntry removed = album.photos.remove(album.photos.size() - 1);
+            if (album.photosByIds.get(removed.imageId) == removed) {
+                album.photosByIds.remove(removed.imageId);
+            }
+        }
+    }
+
+    private static void insertGalleryEntry(AlbumEntry album, PhotoEntry entry) {
+        int oldIndex = -1;
+        for (int i = 0; i < album.photos.size(); i++) {
+            PhotoEntry current = album.photos.get(i);
+            if (current.imageId == entry.imageId && (current.mediaStoreUri == null || current.mediaStoreUri.equals(entry.mediaStoreUri))) {
+                oldIndex = i;
+                break;
+            }
+        }
+        if (oldIndex >= 0) {
+            album.photos.remove(oldIndex);
+        }
+        int low = 0;
+        int high = album.photos.size();
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (album.photos.get(middle).dateTaken >= entry.dateTaken) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        album.photos.add(low, entry);
+        album.photosByIds.put(entry.imageId, entry);
+        if (album.coverPhoto == null || entry.dateTaken >= album.coverPhoto.dateTaken) {
+            album.coverPhoto = entry;
+        }
+    }
+
+    public static void updateGalleryEntry(PhotoEntry entry) {
+        if (entry == null || entry.mediaStoreUri == null || allMediaAlbumEntry == null) {
+            return;
+        }
+        if (entry.isVideo) {
+            addOrUpdateGalleryEntry(allMediaAlbums, allMediaAlbumEntry, entry.bucketId, entry.bucketName, entry, false, MAX_GALLERY_ENTRIES_PER_TYPE * 2);
+            if (allVideosAlbumEntry != null) {
+                insertGalleryEntry(allVideosAlbumEntry, entry);
+                trimGalleryEntry(allVideosAlbumEntry, MAX_GALLERY_ENTRIES_PER_TYPE);
+            }
+        } else {
+            addOrUpdateGalleryEntry(allMediaAlbums, allMediaAlbumEntry, entry.bucketId, entry.bucketName, entry, false, MAX_GALLERY_ENTRIES_PER_TYPE * 2);
+            addOrUpdateGalleryEntry(allPhotoAlbums, allPhotosAlbumEntry, entry.bucketId, entry.bucketName, entry, false, MAX_GALLERY_ENTRIES_PER_TYPE);
+        }
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, 0, allMediaAlbums, allPhotoAlbums, null);
     }
 
     private static void reloadGalleryPhotosAlbums(final int guid) {

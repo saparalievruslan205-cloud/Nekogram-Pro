@@ -543,7 +543,9 @@ public class PhotoAttachPhotoCell extends FrameLayout {
         } else if (photoEntry.thumbPath != null) {
             imageView.setImage(photoEntry.thumbPath, null, Theme.chat_attachEmptyDrawable);
         } else if (photoEntry.path != null) {
-            if (photoEntry.isVideo && !photoEntry.isLivePhoto()) {
+            if (photoEntry.mediaStoreUri != null) {
+                imageView.setImage(ImageLocation.getForMediaStore(photoEntry.mediaStoreUri, photoEntry.imageId, photoEntry.path, photoEntry.isVideo && !photoEntry.isLivePhoto()), null, Theme.chat_attachEmptyDrawable, null);
+            } else if (photoEntry.isVideo && !photoEntry.isLivePhoto()) {
                 imageView.setImage("vthumb://" + photoEntry.imageId + ":" + photoEntry.path, null, Theme.chat_attachEmptyDrawable);
             } else {
                 imageView.setOrientation(photoEntry.orientation, photoEntry.invert, true);

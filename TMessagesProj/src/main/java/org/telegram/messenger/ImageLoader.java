@@ -1476,7 +1476,7 @@ public class ImageLoader {
                                             int thumbWidth = Math.max(64, Math.min(512, (int) w_filter));
                                             int thumbHeight = Math.max(64, Math.min(512, (int) h_filter));
                                             image = ApplicationLoader.applicationContext.getContentResolver().loadThumbnail(
-                                                    ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId),
+                                                    cacheImage.imageLocation.mediaStoreUri != null ? cacheImage.imageLocation.mediaStoreUri : ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId),
                                                     new Size(thumbWidth, thumbHeight), null);
                                         } catch (Throwable ignore) {
                                             image = MediaStore.Video.Thumbnails.getThumbnail(ApplicationLoader.applicationContext.getContentResolver(), mediaId, MediaStore.Video.Thumbnails.MINI_KIND, opts);
@@ -1491,7 +1491,7 @@ public class ImageLoader {
                                         int thumbWidth = Math.max(64, Math.min(512, w_filter > 0 ? (int) w_filter : 256));
                                         int thumbHeight = Math.max(64, Math.min(512, h_filter > 0 ? (int) h_filter : 256));
                                         image = ApplicationLoader.applicationContext.getContentResolver().loadThumbnail(
-                                                ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId),
+                                                cacheImage.imageLocation.mediaStoreUri != null ? cacheImage.imageLocation.mediaStoreUri : ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId),
                                                 new Size(thumbWidth, thumbHeight), null);
                                     } catch (Throwable ignore) {
                                         // Fall back to decoding the file path below.

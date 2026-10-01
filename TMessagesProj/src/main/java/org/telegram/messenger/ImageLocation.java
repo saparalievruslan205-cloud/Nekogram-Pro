@@ -1,5 +1,7 @@
 package org.telegram.messenger;
 
+import android.net.Uri;
+
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.Theme;
@@ -15,6 +17,7 @@ public class ImageLocation {
     public TLRPC.TL_fileLocationToBeDeprecated location;
 
     public String path;
+    public Uri mediaStoreUri;
 
     public SecureDocument secureDocument;
 
@@ -47,6 +50,14 @@ public class ImageLocation {
         }
         ImageLocation imageLocation = new ImageLocation();
         imageLocation.path = path;
+        return imageLocation;
+    }
+
+    public static ImageLocation getForMediaStore(Uri uri, int mediaId, String path, boolean video) {
+        ImageLocation imageLocation = getForPath((video ? "vthumb://" : "thumb://") + mediaId + ":" + path);
+        if (imageLocation != null) {
+            imageLocation.mediaStoreUri = uri;
+        }
         return imageLocation;
     }
 
