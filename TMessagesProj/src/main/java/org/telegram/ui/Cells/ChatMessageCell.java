@@ -1367,6 +1367,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     private long mediaSizeBadgeTotalSize;
     private boolean mediaSizeBadgeDownloading;
     private final RectF mediaSizeBadgeRect = new RectF();
+    private boolean nativeMediaSizeBadgeDrawn;
+    private float nativeMediaInfoBottom;
     private final Paint mediaSizeBadgeBackgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint mediaSizeBadgeTextPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private Drawable foreverDrawable;
@@ -25039,6 +25041,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         lastAnimationTime = newAnimationTime;
         closeExplanationX = -1;
         closeExplanationY = -1;
+        nativeMediaSizeBadgeDrawn = false;
+        nativeMediaInfoBottom = photoImage.getImageY();
 
         if (currentMessageObject.hadAnimationNotReadyLoading && photoImage.getVisible() && !currentMessageObject.needDrawBluredPreview() && (documentAttachType == DOCUMENT_ATTACH_TYPE_ROUND || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO || documentAttachType == DOCUMENT_ATTACH_TYPE_GIF)) {
             AnimatedFileDrawable animation = photoImage.getAnimation();
@@ -25113,6 +25117,17 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                             }
                         }
 
+                        // Narrow album tiles cannot fit Telegram's single-line progress.
+                        // Keep its duration row and let the Pro badge wrap the progress below it.
+                        if (drawLoadingProgress && loadingProgressLayout != null
+                                && isMediaSizeBadgeSupported() && mediaSizeBadgeLoadedSize > 0
+                                && loadingProgressLayout.getLineWidth(0) > photoImage.getImageWidth() - dp(20)) {
+                            drawLoadingProgress = false;
+                            drawDocTitleLayout = false;
+                            alpha = 0;
+                            loadingProgressAlpha = 1f;
+                        }
+
                         loadingProgressAlpha *= (1f - isSmallImage());
                         if (drawPhotoImage && currentMessageObject != null && currentMessageObject.hasMediaSpoilers() && currentMessageObject.isSensitive() && (!currentMessageObject.isMediaSpoilersRevealed || mediaSpoilerRevealProgress != 0 && mediaSpoilerRevealProgress < 1)) {
                             loadingProgressAlpha *= mediaSpoilerRevealProgress;
@@ -25152,6 +25167,15 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                             int oldAlpha = getThemedPaint(Theme.key_paint_chatTimeBackground).getAlpha();
                             getThemedPaint(Theme.key_paint_chatTimeBackground).setAlpha((int) (oldAlpha * controlsAlpha * loadingProgressAlpha * (currentMessageObject.needDrawBluredPreview() ? .4f : 1f)));
                             rect.set(x1, y1, x1 + w, y1 + dp(16.5f + 15.5f * alpha));
+                            // Reserve the overlay actually drawn this frame, including duration-only
+                            // and animated download states. The Pro badge is drawn after overlays.
+                            if (controlsAlpha > 0 && (drawDocTitleLayout
+                                    || drawLoadingProgress && loadingProgressLayout != null
+                                    || !drawLoadingProgress && infoLayout != null)) {
+                                nativeMediaInfoBottom = rect.bottom;
+                                nativeMediaSizeBadgeDrawn = drawDocTitleLayout
+                                        || drawLoadingProgress && loadingProgressLayout != null;
+                            }
                             int[] rad = photoImage.getRoundRadius();
                             int r = Math.min(dp(8), Math.max(rad[0], rad[1]));
                             if (currentMessageObject.needDrawBluredPreview()) {
@@ -26448,6 +26472,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             text.draw(canvas, cx - w / 2f + dp(textPadding), cy, 0xFFFFFFFF, 1f - mediaSpoilerRevealProgress);
             canvas.restore();
         }
+        drawMediaSizeBadge(canvas);
     }
 
     public int getTodoIndex(int taskId) {
@@ -29362,13 +29387,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     photoImage.draw(canvas);
                     photoImage.setAlpha(wasAlpha);
                     photoImage.setForceNotMedia(false);
-                    drawMediaSizeBadge(canvas);
                     return r;
                 }
             }
         }
         boolean drawn = photoImage.draw(canvas);
-        drawMediaSizeBadge(canvas);
         return drawn;
     }
 
@@ -29379,8 +29402,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (currentMessageObject.type == MessageObject.TYPE_PHOTO) {
             return true;
         }
+        if (!currentMessageObject.hasValidGroupId()
+                && currentMessageObject.type != MessageObject.TYPE_VIDEO
+                && currentMessageObject.type != MessageObject.TYPE_GIF) {
+            return false;
+        }
         TLRPC.Document document = currentMessageObject.getDocument();
-        return currentMessageObject.hasValidGroupId() && MessageObject.isVideoDocument(document);
+        return MessageObject.isVideoDocument(document) || MessageObject.isGifDocument(document);
     }
 
     private boolean shouldDrawMediaSizeBadge() {
@@ -29388,13 +29416,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             return false;
         }
         boolean isPhoto = currentMessageObject.type == MessageObject.TYPE_PHOTO;
-        boolean isVideo = MessageObject.isVideoDocument(currentMessageObject.getDocument());
-        Boolean telegramBadgeVisible = isVideo ? isTelegramVideoBadgeVisible() : Boolean.FALSE;
+        TLRPC.Document document = currentMessageObject.getDocument();
+        boolean isVideo = MessageObject.isVideoDocument(document) || MessageObject.isGifDocument(document);
         return MediaSizeBadgePolicy.shouldDrawCustomMediaSizeBadge(
                 isPhoto,
                 isVideo,
-                currentMessageObject.hasValidGroupId(),
-                telegramBadgeVisible
+                nativeMediaSizeBadgeDrawn
         );
     }
 
@@ -29426,12 +29453,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     /**
-     * Mirrors the video size line's actual draw path in onDraw. A null result means that
-     * the cell has not received enough layout state yet; the custom badge then fails closed.
+     * Eligibility for Telegram's native size line. A null result suppresses that line
+     * until the cell has received enough layout state.
      */
     @Nullable
     private Boolean isTelegramVideoBadgeVisible() {
-        if (currentMessageObject == null || documentAttachType != DOCUMENT_ATTACH_TYPE_VIDEO) {
+        if (currentMessageObject == null || documentAttachType != DOCUMENT_ATTACH_TYPE_VIDEO
+                && documentAttachType != DOCUMENT_ATTACH_TYPE_GIF) {
             return false;
         }
         if (documentAttach == null || !photoImage.getVisible()
@@ -29491,7 +29519,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             return 0;
         }
         TLRPC.Document document = currentMessageObject.getDocument();
-        if (MessageObject.isVideoDocument(document) && document.size > 0) {
+        if ((MessageObject.isVideoDocument(document) || MessageObject.isGifDocument(document)) && document.size > 0) {
             return document.size;
         }
 
@@ -29516,7 +29544,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
 
         try {
-            TLObject attach = MessageObject.isVideoDocument(document) ? document : currentPhotoObject;
+            TLObject attach = MessageObject.isVideoDocument(document) || MessageObject.isGifDocument(document)
+                    ? document : currentPhotoObject;
             if (attach != null) {
                 File file = FileLoader.getInstance(currentAccount).getPathToAttach(attach);
                 if (file.isFile()) {
@@ -29564,11 +29593,39 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         mediaSizeBadgeTextPaint.setTextSize(Math.min(dp(10), height * 0.52f));
         mediaSizeBadgeTextPaint.setFakeBoldText(false);
         float paddingX = Math.min(dp(6), Math.max(dp(2), imageWidth * 0.04f));
-        float availableTextWidth = Math.max(dp(8), imageWidth - horizontalInset * 2 - paddingX * 2);
-        CharSequence displayText = TextUtils.ellipsize(text, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
-        float textWidth = mediaSizeBadgeTextPaint.measureText(displayText, 0, displayText.length());
+        float availableTextWidth = Math.max(1, imageWidth - horizontalInset * 2 - paddingX * 2);
+        float preferredTop = Math.max(photoImage.getImageY() + verticalInset, nativeMediaInfoBottom + dp(4));
+        float availableHeight = photoImage.getImageY2() - verticalInset - preferredTop;
+        int separator = text.indexOf(" / ");
+        float lineHeight = dp(12);
+        float twoLineHeight = dp(32);
+        boolean wrapProgress = separator >= 0 && MediaSizeBadgePolicy.getProgressLineCount(
+                mediaSizeBadgeTextPaint.measureText(text), availableTextWidth, twoLineHeight, availableHeight) == 2;
+        CharSequence firstLine = text;
+        CharSequence secondLine = null;
+        if (wrapProgress) {
+            height = twoLineHeight;
+            firstLine = text.substring(0, separator + 2);
+            secondLine = text.substring(separator + 3);
+            float widestLine = Math.max(mediaSizeBadgeTextPaint.measureText(firstLine, 0, firstLine.length()),
+                    mediaSizeBadgeTextPaint.measureText(secondLine, 0, secondLine.length()));
+            if (widestLine > availableTextWidth) {
+                mediaSizeBadgeTextPaint.setTextSize(Math.max(dp(8),
+                        mediaSizeBadgeTextPaint.getTextSize() * availableTextWidth / widestLine));
+            }
+            secondLine = TextUtils.ellipsize(secondLine, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
+        }
+        firstLine = TextUtils.ellipsize(firstLine, mediaSizeBadgeTextPaint, availableTextWidth, TextUtils.TruncateAt.END);
+        float textWidth = mediaSizeBadgeTextPaint.measureText(firstLine, 0, firstLine.length());
+        if (secondLine != null) {
+            textWidth = Math.max(textWidth, mediaSizeBadgeTextPaint.measureText(secondLine, 0, secondLine.length()));
+        }
         float left = photoImage.getImageX() + horizontalInset;
-        float top = photoImage.getImageY() + verticalInset;
+        float top = MediaSizeBadgePolicy.getBadgeTop(photoImage.getImageY() + verticalInset,
+                nativeMediaInfoBottom, dp(4), height, photoImage.getImageY2() - verticalInset);
+        if (Float.isNaN(top)) {
+            return;
+        }
         float right = Math.min(left + textWidth + paddingX * 2, photoImage.getImageX() + imageWidth - horizontalInset);
         mediaSizeBadgeRect.set(left, top, right, top + height);
 
@@ -29577,8 +29634,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         mediaSizeBadgeTextPaint.setAlpha(0xE0);
         canvas.drawRoundRect(mediaSizeBadgeRect, dp(6), dp(6), mediaSizeBadgeBackgroundPaint);
         Paint.FontMetrics fontMetrics = mediaSizeBadgeTextPaint.getFontMetrics();
-        float baseline = mediaSizeBadgeRect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f;
-        canvas.drawText(displayText, 0, displayText.length(), left + paddingX, baseline, mediaSizeBadgeTextPaint);
+        float baseline = mediaSizeBadgeRect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f
+                - (secondLine != null ? lineHeight / 2f : 0);
+        canvas.drawText(firstLine, 0, firstLine.length(), left + paddingX, baseline, mediaSizeBadgeTextPaint);
+        if (secondLine != null) {
+            canvas.drawText(secondLine, 0, secondLine.length(), left + paddingX, baseline + lineHeight, mediaSizeBadgeTextPaint);
+        }
     }
 
     public boolean areTags() {
