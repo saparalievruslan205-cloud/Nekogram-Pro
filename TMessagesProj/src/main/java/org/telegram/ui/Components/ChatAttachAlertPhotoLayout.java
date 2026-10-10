@@ -3918,6 +3918,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     public void onResume() {
         if (parentAlert.isShowing() && !parentAlert.isDismissed() && !PhotoViewer.getInstance().isVisible()) {
             checkCamera(false);
+            PagedGalleryIndex.onGalleryChanged(getContext());
         }
     }
 
@@ -4127,6 +4128,8 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     @Override
     public void onShown() {
         isHidden = false;
+        // Recover collection-only or missed background notifications without a full scan.
+        PagedGalleryIndex.onGalleryChanged(getContext());
         if (cameraView != null) {
             cameraView.setVisibility(VISIBLE);
         }
@@ -4624,13 +4627,18 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         }
 
         public void notifyGalleryEntry(int albumPosition, boolean inserted) {
+            boolean hadCameraSpaceRow = hasCameraSpaceRow;
             getItemCount();
             int adapterPosition = photosStartRow + cameraPhotos.size() + albumPosition;
-            if (hasCameraSpaceRow && adapterPosition - photosStartRow >= itemsPerRow) {
+            if (hasCameraSpaceRow && adapterPosition >= itemsPerRow) {
                 adapterPosition++;
             }
             if (inserted) {
-                notifyItemInserted(adapterPosition);
+                boolean addedCameraSpaceRow = !hadCameraSpaceRow && hasCameraSpaceRow;
+                notifyItemInserted(adapterPosition - (addedCameraSpaceRow && adapterPosition > itemsPerRow ? 1 : 0));
+                if (addedCameraSpaceRow) {
+                    notifyItemInserted(itemsPerRow);
+                }
             } else {
                 notifyItemChanged(adapterPosition);
             }
@@ -4653,6 +4661,11 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
             }
             if (photoPosition < 0) {
                 return position;
+            }
+            int albumPosition = photoPosition - cameraPhotos.size();
+            if (pagedGalleryIndex != null && selectedPagedAlbum != null
+                    && albumPosition >= 0 && albumPosition < selectedPagedAlbum.size()) {
+                return pagedGalleryIndex.getStableId(selectedPagedAlbum, albumPosition);
             }
             MediaController.PhotoEntry entry = getPhotoEntryAtPosition(photoPosition);
             if (entry == null) {
