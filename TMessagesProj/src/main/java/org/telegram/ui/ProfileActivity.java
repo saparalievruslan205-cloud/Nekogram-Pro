@@ -12738,6 +12738,9 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 
     @Override
     public void onRequestPermissionsResultFragment(int requestCode, String[] permissions, int[] grantResults) {
+        if (sharedMediaLayout != null && sharedMediaLayout.onGallerySavePermissionsResult(requestCode, grantResults)) {
+            return;
+        }
         if (imageUpdater != null) {
             imageUpdater.onRequestPermissionsResultFragment(requestCode, permissions, grantResults);
         }

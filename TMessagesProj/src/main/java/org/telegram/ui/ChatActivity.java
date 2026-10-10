@@ -8331,7 +8331,7 @@ public class ChatActivity extends BaseFragment implements
         }
 
         actionsButtonsLayout = new ChatActivityActionsButtonsLayout(context, resourceProvider, blurredBackgroundColorProvider, glassBackgroundDrawableFactory);
-        actionsButtonsLayout.setSelectButtonOnClickListener(v -> selectMessagesBetweenSelection());
+        actionsButtonsLayout.setSelectButtonOnClickListener(v -> showSelectionOrderPreview());
         actionsButtonsLayout.setReplyButtonOnClickListener(v -> {
             MessageObject messageObject = null;
             for (int a = 1; a >= 0; a--) {
@@ -19719,152 +19719,8 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void showSelectionOrderPreview() {
-        Activity activity = getParentActivity();
-        ArrayList<MessageObject> orderedMessages = getSelectedMessagesInSelectionOrder();
-        if (activity == null || orderedMessages.isEmpty()) {
-            return;
-        }
-        RecyclerView recyclerView = new RecyclerView(activity);
-        recyclerView.setLayoutManager(new LinearLayoutManager(activity));
-        recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        recyclerView.setBackgroundColor(Theme.getColor(Theme.key_dialogBackground, themeDelegate));
-        recyclerView.setPadding(0, 0, 0, dp(8));
-        int maximumHeight = AndroidUtilities.displaySize.y > 0 ? AndroidUtilities.displaySize.y * 2 / 3 : dp(520);
-        int listHeight = Math.min(maximumHeight, Math.max(dp(72), orderedMessages.size() * dp(72)));
-        recyclerView.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
-        BottomSheet[] orderSheetRef = new BottomSheet[1];
-        RecyclerView.Adapter<RecyclerView.ViewHolder> orderAdapter = new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-            @Override
-            public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-                return new RecyclerView.ViewHolder(new SelectionOrderRow(activity)) {};
-            }
-
-            @Override
-            public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-                MessageObject message = orderedMessages.get(position);
-                SelectionOrderRow row = (SelectionOrderRow) holder.itemView;
-                row.setMessage(message, position + 1);
-                boolean canOpenPreview = message.isPhoto() || message.isVideo();
-                row.setClickable(canOpenPreview);
-                row.setOnClickListener(canOpenPreview ? v -> {
-                    BottomSheet orderSheet = orderSheetRef[0];
-                    if (orderSheet != null) {
-                        orderSheet.setOnDismissListener(() -> openPhotoViewerForMessage(null, message));
-                        orderSheet.dismiss();
-                    }
-                } : null);
-            }
-
-            @Override
-            public int getItemCount() {
-                return orderedMessages.size();
-            }
-        };
-        recyclerView.setAdapter(orderAdapter);
-        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
-            @Override
-            public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder source, @NonNull RecyclerView.ViewHolder target) {
-                int fromPosition = source.getAdapterPosition();
-                int toPosition = target.getAdapterPosition();
-                if (fromPosition == RecyclerView.NO_POSITION || toPosition == RecyclerView.NO_POSITION || fromPosition == toPosition) {
-                    return false;
-                }
-                Collections.swap(orderedMessages, fromPosition, toPosition);
-                orderAdapter.notifyItemMoved(fromPosition, toPosition);
-                int start = Math.min(fromPosition, toPosition);
-                orderAdapter.notifyItemRangeChanged(start, Math.abs(fromPosition - toPosition) + 1);
-                setSelectedMessagesOrder(orderedMessages);
-                return true;
-            }
-
-            @Override
-            public boolean isItemViewSwipeEnabled() {
-                return false;
-            }
-
-            @Override
-            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
-            }
-        }).attachToRecyclerView(recyclerView);
-        orderSheetRef[0] = new BottomSheet.Builder(activity, false, themeDelegate)
-                .setTitle(LocaleController.formatString(R.string.SelectionOrderTitle, orderedMessages.size()))
-                .setCustomView(recyclerView)
-                .create();
-        orderSheetRef[0].show();
-    }
-
-    private class SelectionOrderRow extends LinearLayout {
-        private final TextView numberView;
-        private final BackupImageView imageView;
-        private final TextView descriptionView;
-        private final ImageView dragHandle;
-
-        SelectionOrderRow(Context context) {
-            super(context);
-            setOrientation(HORIZONTAL);
-            setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(16), dp(6), dp(16), dp(6));
-            numberView = new TextView(context);
-            numberView.setGravity(Gravity.CENTER);
-            numberView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText, themeDelegate));
-            numberView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-            numberView.setTypeface(AndroidUtilities.bold());
-            addView(numberView, new LinearLayout.LayoutParams(dp(32), LayoutParams.MATCH_PARENT));
-
-            imageView = new BackupImageView(context);
-            imageView.setRoundRadius(dp(6));
-            addView(imageView, new LinearLayout.LayoutParams(dp(60), dp(60)));
-
-            descriptionView = new TextView(context);
-            descriptionView.setGravity(Gravity.CENTER_VERTICAL);
-            descriptionView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText, themeDelegate));
-            descriptionView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-            descriptionView.setMaxLines(2);
-            descriptionView.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f);
-            textParams.leftMargin = dp(12);
-            addView(descriptionView, textParams);
-
-            dragHandle = new ImageView(context);
-            dragHandle.setImageResource(R.drawable.ic_drag_handle);
-            dragHandle.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText, themeDelegate));
-            dragHandle.setContentDescription(LocaleController.getString(R.string.SelectionOrderDragHandle));
-            LinearLayout.LayoutParams dragParams = new LinearLayout.LayoutParams(dp(24), dp(24));
-            dragParams.leftMargin = dp(8);
-            addView(dragHandle, dragParams);
-        }
-
-        void setMessage(MessageObject message, int order) {
-            numberView.setText(String.valueOf(order));
-            CharSequence description = message.messageText;
-            TLRPC.MessageMedia media = message.messageOwner == null ? null : MessageObject.getMedia(message.messageOwner);
-            if (TextUtils.isEmpty(description)) {
-                if (message.isPhoto()) {
-                    description = LocaleController.getString(R.string.SelectionOrderPhoto);
-                } else if (message.isVideo()) {
-                    description = LocaleController.getString(R.string.SelectionOrderVideo);
-                } else if (message.getDocument() != null) {
-                    description = FileLoader.getDocumentFileName(message.getDocument());
-                } else {
-                    description = LocaleController.getString(R.string.Message);
-                }
-            }
-            descriptionView.setText(description);
-            imageView.setVisibility(View.GONE);
-            if (media != null && media.photo != null && message.isPhoto()) {
-                TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(media.photo.sizes, dp(60), false, null, true);
-                if (size != null) {
-                    imageView.setImage(ImageLocation.getForPhoto(size, media.photo), "60_60", Theme.chat_attachEmptyDrawable, message);
-                    imageView.setVisibility(View.VISIBLE);
-                }
-            } else if (message.getDocument() != null && (message.isVideo() || message.isPhoto())) {
-                TLRPC.Document document = message.getDocument();
-                TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(document.thumbs, dp(60), false, null, true);
-                ImageLocation location = thumb != null ? ImageLocation.getForDocument(thumb, document) : ImageLocation.getForDocument(document);
-                imageView.setImage(location, "60_60", Theme.chat_attachEmptyDrawable, message);
-                imageView.setVisibility(View.VISIBLE);
-            }
-        }
+        SelectionOrderSheet.show(getParentActivity(), getSelectedMessagesInSelectionOrder(), themeDelegate,
+                this::setSelectedMessagesOrder, message -> openPhotoViewerForMessage(null, message));
     }
 
     private void setSelectedMessagesOrder(ArrayList<MessageObject> orderedMessages) {
@@ -20278,7 +20134,7 @@ public class ChatActivity extends BaseFragment implements
                 }
 
                 if (actionsButtonsLayout != null) {
-                    actionsButtonsLayout.showSelectButton(canSelectMessagesBetweenSelection(), true);
+                    actionsButtonsLayout.showSelectButton(selectedMessagesIds[0].size() + selectedMessagesIds[1].size() > 0, true);
                 }
 
                 if (editItem != null) {

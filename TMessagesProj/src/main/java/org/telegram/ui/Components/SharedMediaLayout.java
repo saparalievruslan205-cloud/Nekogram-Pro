@@ -14,7 +14,9 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.DialogInterface;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
@@ -78,6 +80,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLoader;
@@ -714,6 +717,8 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     private ActionBarMenuItem forwardItem;
     private ActionBarMenuItem forwardNoQuoteItem;
     private ActionBarMenuItem gotoItem;
+    private ActionBarMenuItem saveGalleryItem;
+    private ActionBarMenuItem selectionOrderItem;
     private ActionBarMenuItem pinItem;
     private ActionBarMenuItem unpinItem;
     private int searchItemState;
@@ -753,6 +758,9 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     private int initialTab;
 
     private SparseArray<MessageObject>[] selectedFiles = new SparseArray[]{new SparseArray<>(), new SparseArray<>()};
+    private final ArrayList<MessageObject> selectedMessagesInSelectionOrder = new ArrayList<>();
+    private ArrayList<MessageObject> pendingGallerySaveMessages;
+    private static final int REQUEST_CODE_GALLERY_SAVE = 731;
     private int cantDeleteMessagesCount;
     private boolean scrolling;
     private long mergeDialogId;
@@ -2230,6 +2238,11 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         actionModeLayout.setAlpha(0.0f);
         actionModeLayout.setClickable(true);
         actionModeLayout.setVisibility(INVISIBLE);
+        actionModeLayout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft) {
+                updateActionModeButtonWidths();
+            }
+        });
 
         closeButton = new ImageView(context);
         closeButton.setScaleType(ImageView.ScaleType.CENTER);
@@ -2243,12 +2256,29 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
 
         selectedMessagesCountTextView = new NumberTextView(context);
         selectedMessagesCountTextView.setTextSize(18);
+        selectedMessagesCountTextView.setMinimumWidth(dp(24));
         selectedMessagesCountTextView.setTypeface(AndroidUtilities.bold());
         selectedMessagesCountTextView.setTextColor(getThemedColor(Theme.key_actionBarActionModeDefaultIcon));
         actionModeLayout.addView(selectedMessagesCountTextView, LayoutHelper.createLinear(0, LayoutHelper.MATCH_PARENT, 1.0f, 18, 0, 0, 0));
         actionModeViews.add(selectedMessagesCountTextView);
 
         if (!isStoriesView()) {
+            selectionOrderItem = new ActionBarMenuItem(context, null, getThemedColor(Theme.key_actionBarActionModeDefaultSelector), getThemedColor(Theme.key_actionBarActionModeDefaultIcon), false);
+            selectionOrderItem.setIcon(R.drawable.ic_selection_order);
+            selectionOrderItem.setContentDescription(getString(R.string.SelectionOrderButton));
+            selectionOrderItem.setVisibility(GONE);
+            actionModeLayout.addView(selectionOrderItem, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+            actionModeViews.add(selectionOrderItem);
+            selectionOrderItem.setOnClickListener(v -> showSelectionOrderPreview());
+
+            saveGalleryItem = new ActionBarMenuItem(context, null, getThemedColor(Theme.key_actionBarActionModeDefaultSelector), getThemedColor(Theme.key_actionBarActionModeDefaultIcon), false);
+            saveGalleryItem.setIcon(R.drawable.msg_gallery);
+            saveGalleryItem.setContentDescription(getString(R.string.SaveToGallery));
+            saveGalleryItem.setVisibility(GONE);
+            actionModeLayout.addView(saveGalleryItem, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+            actionModeViews.add(saveGalleryItem);
+            saveGalleryItem.setOnClickListener(v -> saveSelectedMessagesToGallery());
+
             gotoItem = new ActionBarMenuItem(context, null, getThemedColor(Theme.key_actionBarActionModeDefaultSelector), getThemedColor(Theme.key_actionBarActionModeDefaultIcon), false);
             gotoItem.setIcon(R.drawable.msg_message);
             gotoItem.setContentDescription(getString(R.string.AccDescrGoToMessage));
@@ -3932,6 +3962,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     private void updateForwardItem() {
+        updateGalleryActions();
         if (forwardItem == null) {
             return;
         }
@@ -3946,6 +3977,163 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             if (forwardNoQuoteItem != null) forwardNoQuoteItem.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_actionBarActionModeDefaultSelector), 5));
         }
         ForwardItem.setupForwardItem(forwardItem, ForwardItem.hasCaption(getForwardingMessages()), resourcesProvider, id -> onActionBarItemClick(forwardItem, id));
+    }
+
+    private boolean isMessageSelected(MessageObject message) {
+        return selectedFiles[message.getDialogId() == dialog_id ? 0 : 1].get(message.getId()) != null;
+    }
+
+    private void recordSelectedMessageOrder(MessageObject message) {
+        selectedMessagesInSelectionOrder.removeIf(existing -> !isMessageSelected(existing)
+                || existing.getDialogId() == message.getDialogId() && existing.getId() == message.getId());
+        selectedMessagesInSelectionOrder.add(message);
+    }
+
+    private ArrayList<MessageObject> getSelectedMessagesInSelectionOrder() {
+        selectedMessagesInSelectionOrder.removeIf(message -> !isMessageSelected(message));
+        for (int index = 1; index >= 0; index--) {
+            for (int i = 0; i < selectedFiles[index].size(); i++) {
+                MessageObject selected = selectedFiles[index].valueAt(i);
+                boolean found = false;
+                for (MessageObject ordered : selectedMessagesInSelectionOrder) {
+                    if (ordered.getDialogId() == selected.getDialogId() && ordered.getId() == selected.getId()) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    selectedMessagesInSelectionOrder.add(selected);
+                }
+            }
+        }
+        return new ArrayList<>(selectedMessagesInSelectionOrder);
+    }
+
+    private void showSelectionOrderPreview() {
+        SelectionOrderSheet.show(profileActivity.getParentActivity(), getSelectedMessagesInSelectionOrder(), resourcesProvider,
+                ordered -> {
+                    selectedMessagesInSelectionOrder.clear();
+                    for (MessageObject message : ordered) {
+                        if (isMessageSelected(message)) {
+                            selectedMessagesInSelectionOrder.add(message);
+                        }
+                    }
+                }, message -> {
+                    ArrayList<MessageObject> previews = new ArrayList<>();
+                    for (MessageObject selected : getSelectedMessagesInSelectionOrder()) {
+                        if (selected.isPhoto() || selected.isVideo() || selected.isGif()) {
+                            previews.add(selected);
+                        }
+                    }
+                    int index = previews.indexOf(message);
+                    if (index >= 0 && profileActivity.getParentActivity() != null) {
+                        PhotoViewer.getInstance().setParentActivity(profileActivity);
+                        PhotoViewer.getInstance().openPhoto(previews, index, 0, 0, 0, provider);
+                    }
+                });
+    }
+
+    private ArrayList<MessageObject> getSelectedGalleryMessages() {
+        ArrayList<MessageObject> result = new ArrayList<>();
+        if (profileActivity.getMessagesController().isPeerNoForwards(dialog_id)) {
+            return result;
+        }
+        for (MessageObject message : getSelectedMessagesInSelectionOrder()) {
+            if (message.messageOwner == null || message.messageOwner.noforwards || message.messageOwner.ttl > 0
+                    || profileActivity.getMessagesController().isPeerNoForwards(message.getDialogId())
+                    || message.hasRevealedExtendedMedia() || message.needDrawBluredPreview()
+                    || message.isSending() || message.isSendError() || message.isVoiceOnce()
+                    || message.isRoundOnce() || message.isRoundVideo()) {
+                continue;
+            }
+            TLRPC.MessageMedia media = MessageObject.getMedia(message.messageOwner);
+            if (media != null && media.ttl_seconds == 0
+                    && (message.isPhoto() && media instanceof TLRPC.TL_messageMediaPhoto
+                    || message.isVideo() && media instanceof TLRPC.TL_messageMediaDocument)) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    private void updateGalleryActions() {
+        boolean regularMedia = getClosestTab() >= TAB_PHOTOVIDEO && getClosestTab() <= TAB_GIF;
+        if (selectionOrderItem != null) {
+            selectionOrderItem.setVisibility(regularMedia && selectedFiles[0].size() + selectedFiles[1].size() > 0 ? VISIBLE : GONE);
+        }
+        if (saveGalleryItem != null) {
+            saveGalleryItem.setVisibility(regularMedia && !getSelectedGalleryMessages().isEmpty() ? VISIBLE : GONE);
+        }
+        updateActionModeButtonWidths();
+    }
+
+    private void updateActionModeButtonWidths() {
+        if (actionModeLayout == null) {
+            return;
+        }
+        int count = 0;
+        for (View action : actionModeViews) {
+            if (action != selectedMessagesCountTextView && action.getVisibility() == VISIBLE) {
+                count++;
+            }
+        }
+        int width = actionModeLayout.getWidth() > 0 ? actionModeLayout.getWidth() : AndroidUtilities.displaySize.x;
+        if (width <= 0 || count == 0) {
+            return;
+        }
+        boolean customActionsVisible = selectionOrderItem != null && selectionOrderItem.getVisibility() == VISIBLE
+                || saveGalleryItem != null && saveGalleryItem.getVisibility() == VISIBLE;
+        int buttonWidth = customActionsVisible
+                ? Math.min(dp(48), Math.max(dp(32), (width - dp(54)) / count)) : dp(54);
+        for (View action : actionModeViews) {
+            if (action != selectedMessagesCountTextView) {
+                ViewGroup.LayoutParams params = action.getLayoutParams();
+                if (params.width != buttonWidth) {
+                    params.width = buttonWidth;
+                    action.setLayoutParams(params);
+                }
+            }
+        }
+    }
+
+    private void saveSelectedMessagesToGallery() {
+        Activity activity = profileActivity.getParentActivity();
+        ArrayList<MessageObject> messages = getSelectedGalleryMessages();
+        if (activity == null || messages.isEmpty()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE)
+                && activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingGallerySaveMessages = messages;
+            activity.requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_CODE_GALLERY_SAVE);
+            return;
+        }
+        startGalleryBatchSave(messages);
+    }
+
+    public boolean onGallerySavePermissionsResult(int requestCode, int[] grantResults) {
+        if (requestCode != REQUEST_CODE_GALLERY_SAVE) {
+            return false;
+        }
+        ArrayList<MessageObject> messages = pendingGallerySaveMessages;
+        pendingGallerySaveMessages = null;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && messages != null) {
+            startGalleryBatchSave(messages);
+        }
+        return true;
+    }
+
+    private void startGalleryBatchSave(ArrayList<MessageObject> messages) {
+        pendingGallerySaveMessages = null;
+        closeActionMode();
+        MediaController.saveGalleryFilesFromMessages(profileActivity.getParentActivity(), profileActivity.getAccountInstance(), messages,
+                (saved, failed, cancelled) -> {
+                    if (profileActivity.getParentActivity() != null) {
+                        int resultId = cancelled ? R.string.GalleryBatchSaveCancelled : R.string.GalleryBatchSaveSummary;
+                        BulletinFactory.of(profileActivity).createSimpleBulletin(R.drawable.msg_gallery,
+                                LocaleController.formatString(resultId, saved, failed), "").show();
+                    }
+                });
     }
     private boolean hasNoforwardsMessage() {
         boolean hasNoforwardsMessage = false;
@@ -5033,6 +5221,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     protected void onSelectedTabChanged() {
+        updateGalleryActions();
         boolean pollerEnabled = isStoriesView() || isArchivedOnlyStoriesView();
         if (archivedStoriesAdapter.poller != null) {
             archivedStoriesAdapter.poller.start(pollerEnabled && getClosestTab() == TAB_ARCHIVED_STORIES);
@@ -5064,6 +5253,8 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     public void onDestroy() {
+        pendingGallerySaveMessages = null;
+        selectedMessagesInSelectionOrder.clear();
         observersGroup.removeAllObservers();
 
         if (storiesAdapter != null && storiesAdapter.storiesList != null) {
@@ -6077,6 +6268,9 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     protected void showActionMode(boolean show) {
+        if (!show) {
+            selectedMessagesInSelectionOrder.clear();
+        }
         if (isActionModeShowed == show) {
             return;
         }
@@ -6111,6 +6305,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         if (show) {
             updateStoriesPinButton();
         }
+        updateGalleryActions();
     }
 
     private void updateStoriesPinButton() {
@@ -7767,6 +7962,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         }
 
         selectedFiles[item.getDialogId() == dialog_id ? 0 : 1].put(item.getId(), item);
+        recordSelectedMessageOrder(item);
         if (!item.canDeleteMessage(false, null)) {
             cantDeleteMessagesCount++;
         }
@@ -7832,6 +8028,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     return;
                 }
                 selectedFiles[loadIndex].put(message.getId(), message);
+                recordSelectedMessageOrder(message);
                 if (!message.canDeleteMessage(false, null)) {
                     cantDeleteMessagesCount++;
                 }

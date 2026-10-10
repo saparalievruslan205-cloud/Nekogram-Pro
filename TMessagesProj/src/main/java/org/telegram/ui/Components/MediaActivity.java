@@ -1145,6 +1145,14 @@ public class MediaActivity extends BaseFragment implements SharedMediaLayout.Sha
     }
 
     @Override
+    public void onRequestPermissionsResultFragment(int requestCode, String[] permissions, int[] grantResults) {
+        if (sharedMediaLayout != null && sharedMediaLayout.onGallerySavePermissionsResult(requestCode, grantResults)) {
+            return;
+        }
+        super.onRequestPermissionsResultFragment(requestCode, permissions, grantResults);
+    }
+
+    @Override
     public boolean isSupportEdgeToEdge() {
         return true;
     }
