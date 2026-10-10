@@ -16,6 +16,7 @@ import android.text.TextPaint;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.LinearLayout;
 
 import org.telegram.messenger.ImageLocation;
@@ -36,6 +37,15 @@ public class AlbumButton extends View {
     private final Rect visibleRect = new Rect();
     private boolean coverRequested;
     private int coverRetryCount;
+    private ViewTreeObserver coverObserver;
+    private final ViewTreeObserver.OnScrollChangedListener coverScrollListener = this::updateCoverVisibility;
+    private final Runnable updateCover = this::updateCoverVisibility;
+    private final Runnable retryCover = () -> {
+        if (isAttachedToWindow() && getGlobalVisibleRect(visibleRect)) {
+            coverRequested = false;
+            requestCoverIfVisible();
+        }
+    };
 
     private final TextPaint namePaintLayout = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private StaticLayout nameLayout;
@@ -75,16 +85,27 @@ public class AlbumButton extends View {
         imageReceiver.setDelegate((receiver, set, thumb, memCache) -> {
             if (!set && coverRequested && cover != null && coverRetryCount < 2 && isAttachedToWindow()) {
                 coverRetryCount++;
-                postDelayed(() -> {
-                    if (cover != null && isAttachedToWindow()) {
-                        coverRequested = false;
-                        requestCoverIfVisible();
-                    }
-                }, 450L * coverRetryCount);
+                removeCallbacks(retryCover);
+                postDelayed(retryCover, 450L * coverRetryCount);
             }
         });
 
         setContentDescription(title + (count > 0 ? " " + LocaleController.formatPluralStringComma("Media", count) : ""));
+    }
+
+    private void updateCoverVisibility() {
+        if (!isAttachedToWindow()) {
+            return;
+        }
+        if (getGlobalVisibleRect(visibleRect)) {
+            requestCoverIfVisible();
+        } else if (coverRequested) {
+            // The popup uses a ScrollView, which can reuse child display lists on scroll.
+            // Load newly visible covers explicitly and release thumbnails outside the viewport.
+            coverRequested = false;
+            removeCallbacks(retryCover);
+            imageReceiver.setImageBitmap(noGalleryDrawable);
+        }
     }
 
     private void requestCoverIfVisible() {
@@ -110,6 +131,7 @@ public class AlbumButton extends View {
             return;
         }
         this.cover = cover;
+        removeCallbacks(retryCover);
         coverRequested = false;
         coverRetryCount = 0;
         imageReceiver.setImageBitmap(noGalleryDrawable);
@@ -133,12 +155,31 @@ public class AlbumButton extends View {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         imageReceiver.onAttachedToWindow();
+        coverObserver = getViewTreeObserver();
+        coverObserver.addOnScrollChangedListener(coverScrollListener);
+        post(updateCover);
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        ViewTreeObserver observer = coverObserver != null && coverObserver.isAlive() ? coverObserver : getViewTreeObserver();
+        if (observer.isAlive()) {
+            observer.removeOnScrollChangedListener(coverScrollListener);
+        }
+        coverObserver = null;
+        removeCallbacks(updateCover);
+        removeCallbacks(retryCover);
         imageReceiver.onDetachedFromWindow();
+        coverRequested = false;
+        coverRetryCount = 0;
+        imageReceiver.setImageBitmap(noGalleryDrawable);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        updateCoverVisibility();
     }
     final float imageSize = 30;
 
