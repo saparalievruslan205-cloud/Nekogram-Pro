@@ -825,6 +825,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryItemChanged);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.pagedGalleryItemDeleted);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.cameraInitied);
         FrameLayout container = alert.getContainer();
         showAvatarConstructor = parentAlert.avatarPicker != 0;
@@ -2778,6 +2779,10 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                         : wasAllPhotos ? index.getAllPhotos() : wasAllVideos ? index.getAllVideos()
                         : index.findAlbum(previousBucket, false);
                 int selectedIndex = dropDownPagedAlbums.indexOf(selectedPagedAlbum);
+                if (selectedIndex < 0) {
+                    selectedPagedAlbum = indexedAlbum;
+                    selectedIndex = dropDownPagedAlbums.indexOf(selectedPagedAlbum);
+                }
                 selectedAlbumEntry = pagedAlbumEntries.get(Math.max(0, selectedIndex));
                 if (adapter != null) {
                     adapter.notifyDataSetChanged();
@@ -3876,6 +3881,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.albumsDidLoad);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryIndexDidLoad);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryItemChanged);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.pagedGalleryItemDeleted);
         ++galleryIndexGeneration;
         if (pendingIndexListener != null) {
             PagedGalleryIndex.removeSharedListener(pendingIndexListener);
@@ -4511,6 +4517,28 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.pagedGalleryItemDeleted) {
+            String volume = (String) args[0];
+            int photoId = (Integer) args[1];
+            Object selected = selectedPhotos.get(photoId);
+            if (selected == null || selected instanceof MediaController.PhotoEntry && PagedGalleryIndex.matchesMediaEntry(volume, photoId, (MediaController.PhotoEntry) selected)) {
+                boolean selectionChanged = selectedPhotos.remove(photoId) != null;
+                selectionChanged |= selectedPhotosOrder.remove((Object) photoId);
+                if (selectionChanged && !parentAlert.destroyed) {
+                    updatePhotosCounter(false);
+                    updateCheckedPhotoIndices();
+                    parentAlert.updateCountButton(0);
+                }
+            }
+            if (pagedGalleryIndex != null && !parentAlert.destroyed) {
+                // Rebuild album choices and choose All Media if the current bucket vanished.
+                loadPagedGalleryIndex(true);
+                if (gridView != null) {
+                    gridView.post(this::requestVisibleGalleryPages);
+                }
+            }
+            return;
+        }
         if (id == NotificationCenter.pagedGalleryItemChanged) {
             if (pagedGalleryIndex == null || parentAlert.destroyed || args.length < 2 || !(args[0] instanceof MediaController.PhotoEntry)) {
                 return;

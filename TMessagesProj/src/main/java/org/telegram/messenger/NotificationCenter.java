@@ -200,6 +200,7 @@ public class NotificationCenter {
     public static final int albumsDidLoad = totalEvents++;
     public static final int pagedGalleryIndexDidLoad = totalEvents++;
     public static final int pagedGalleryItemChanged = totalEvents++;
+    public static final int pagedGalleryItemDeleted = totalEvents++;
     public static final int audioDidSent = totalEvents++;
     public static final int audioRecordTooShort = totalEvents++;
     public static final int audioRouteChanged = totalEvents++;
@@ -586,7 +587,7 @@ public class NotificationCenter {
     }
 
     public void postNotificationName(final int id, Object... args) {
-        boolean allowDuringAnimation = id == startAllHeavyOperations || id == stopAllHeavyOperations || id == didReplacedPhotoInMemCache || id == closeChats || id == invalidateMotionBackground || id == needCheckSystemBarColors || id == messageReceivedByServer2;
+        boolean allowDuringAnimation = id == startAllHeavyOperations || id == stopAllHeavyOperations || id == didReplacedPhotoInMemCache || id == closeChats || id == invalidateMotionBackground || id == needCheckSystemBarColors || id == messageReceivedByServer2 || id == pagedGalleryItemDeleted;
         ArrayList<Integer> expiredIndices = null;
         if (!allowDuringAnimation && allowedNotifications.size() > 0) {
             int size = allowedNotifications.size();
@@ -666,7 +667,7 @@ public class NotificationCenter {
             delayedPosts.add(delayedPost);
             return;
         }
-        if (!postponeCallbackList.isEmpty()) {
+        if (id != pagedGalleryItemDeleted && !postponeCallbackList.isEmpty()) {
             for (int i = 0; i < postponeCallbackList.size(); i++) {
                 if (postponeCallbackList.get(i).needPostpone(id, currentAccount, args)) {
                     delayedPosts.add(new DelayedPost(id, args));

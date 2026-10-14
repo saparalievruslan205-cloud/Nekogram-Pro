@@ -37,10 +37,10 @@ public final class PagedGalleryIndex {
     private static Runnable pendingSharedRefresh;
     private static ContentObserver mediaStoreObserver;
     private static Runnable pendingMediaStoreChange;
+    private static final Object uriLock = new Object();
     private static final ArrayList<Uri> pendingMediaUris = new ArrayList<>();
     private static final HashSet<String> queryingMediaUris = new HashSet<>();
     private static final HashSet<String> repeatMediaQueries = new HashSet<>();
-    private static boolean recentReconcileNeeded;
     private static final int MAX_PENDING_MEDIA_URIS = 32;
     private static final int MAX_MEDIA_QUERY_RETRIES = 3;
     private static final int RECENT_MEDIA_QUERY_LIMIT = 128;
@@ -88,6 +88,7 @@ public final class PagedGalleryIndex {
         try {
             resolver.registerContentObserver(Uri.parse("content://media"), true, mediaStoreObserver);
         } catch (Throwable e) {
+            mediaStoreObserver = null;
             FileLog.e(e);
         }
     }
@@ -125,9 +126,27 @@ public final class PagedGalleryIndex {
         if (context == null) {
             return;
         }
-        registerMediaStoreObserver(context.getApplicationContext());
+        synchronized (uriLock) {
+            enqueueMediaUri(uri);
+        }
+        Context appContext = context.getApplicationContext();
+        AndroidUtilities.runOnUIThread(() -> {
+            registerMediaStoreObserver(appContext);
+            if (pendingMediaStoreChange != null) {
+                AndroidUtilities.cancelRunOnUIThread(pendingMediaStoreChange);
+            }
+            pendingMediaStoreChange = () -> {
+                pendingMediaStoreChange = null;
+                processDeferredMediaChanges(appContext);
+            };
+            AndroidUtilities.runOnUIThread(pendingMediaStoreChange, 300);
+        });
+    }
+
+    // Call only while holding uriLock. The null URI represents a bounded recent scan.
+    private static void enqueueMediaUri(Uri uri) {
         if (!pendingMediaUris.contains(uri)) {
-            if (pendingMediaUris.size() >= MAX_PENDING_MEDIA_URIS) {
+            if (pendingMediaUris.size() >= MAX_PENDING_MEDIA_URIS && !queryingMediaUris.contains(requestKey(uri))) {
                 // A burst must not silently discard the remaining changes. Reconcile a
                 // bounded recent window as well as the item URIs already queued.
                 if (!pendingMediaUris.contains(null)) {
@@ -137,58 +156,67 @@ public final class PagedGalleryIndex {
                 pendingMediaUris.add(uri);
             }
         }
-        if (pendingMediaStoreChange != null) {
-            AndroidUtilities.cancelRunOnUIThread(pendingMediaStoreChange);
-        }
-        Context appContext = context.getApplicationContext();
-        pendingMediaStoreChange = () -> {
-            pendingMediaStoreChange = null;
-            ArrayList<Uri> changes = new ArrayList<>(pendingMediaUris);
-            pendingMediaUris.clear();
-            for (Uri changedUri : changes) {
-                queryChangedMedia(appContext, changedUri, 0);
+    }
+
+    private static String requestKey(Uri uri) {
+        int mediaId = getMediaIdFromUri(uri);
+        String volume = getVolumeFromUri(uri);
+        return mediaId < 0 ? "latest:" + volume : mediaKey(volume, mediaId);
+    }
+
+    private static ArrayList<Uri> takePendingMediaQueries() {
+        synchronized (uriLock) {
+            ArrayList<Uri> changes = new ArrayList<>();
+            // Reserve slots and remove only those notifications in one atomic snapshot.
+            // Notifications for in-flight URIs stay pending until that query finishes.
+            for (Uri uri : new ArrayList<>(pendingMediaUris)) {
+                String key = requestKey(uri);
+                if (queryingMediaUris.contains(key)) {
+                    repeatMediaQueries.add(key);
+                } else if (queryingMediaUris.size() < MAX_REQUESTS) {
+                    queryingMediaUris.add(key);
+                    pendingMediaUris.remove(uri);
+                    changes.add(uri);
+                }
             }
-        };
-        AndroidUtilities.runOnUIThread(pendingMediaStoreChange, 300);
+            return changes;
+        }
+    }
+
+    private static void finishMediaQuery(Context context, Uri uri) {
+        synchronized (uriLock) {
+            String key = requestKey(uri);
+            queryingMediaUris.remove(key);
+            repeatMediaQueries.remove(key);
+            // Never remove from pendingMediaUris here: it may be a newer notification.
+        }
+        processDeferredMediaChanges(context);
     }
 
     private static void queryChangedMedia(Context context, Uri uri, int attempt) {
         String volume = getVolumeFromUri(uri);
         int mediaId = getMediaIdFromUri(uri);
-        String requestKey = mediaId < 0 ? "latest:" + volume : mediaKey(volume, mediaId);
-        if (!hasGalleryPermission(context)) {
-            queryingMediaUris.remove(requestKey);
-            repeatMediaQueries.remove(requestKey);
-            return;
-        }
-        if (attempt == 0 && !queryingMediaUris.contains(requestKey) && queryingMediaUris.size() >= MAX_REQUESTS) {
-            // Bound provider work as well as pending URIs and PhotoEntry memory.
-            // A released slot will reconcile the latest rows after a large burst.
-            recentReconcileNeeded = true;
-            return;
-        }
-        if (attempt == 0 && !queryingMediaUris.add(requestKey)) {
-            // A publish notification can arrive during the final pending-row retry.
-            // Remember it instead of losing it behind the in-flight query.
-            repeatMediaQueries.add(requestKey);
-            return;
-        }
-        if (sharedIndex == null) {
-            if (pendingMediaUris.size() < MAX_PENDING_MEDIA_URIS && !pendingMediaUris.contains(uri)) {
-                pendingMediaUris.add(uri);
+        if (!hasGalleryPermission(context) || sharedIndex == null) {
+            synchronized (uriLock) {
+                if (sharedIndex == null) {
+                    enqueueMediaUri(uri);
+                }
+                queryingMediaUris.remove(requestKey(uri));
+                repeatMediaQueries.remove(requestKey(uri));
             }
-            queryingMediaUris.remove(requestKey);
             return;
         }
         Utilities.globalQueue.postRunnable(() -> {
-            ArrayList<MediaController.PhotoEntry> entries = new ArrayList<>();
+            MediaQueryResult query = null;
             try {
-                entries = queryMediaEntries(context, volume, mediaId);
+                query = queryMediaEntries(context, volume, mediaId);
             } catch (Throwable e) {
                 FileLog.e(e);
             }
-            ArrayList<MediaController.PhotoEntry> results = entries;
+            MediaQueryResult queryResult = query;
             AndroidUtilities.runOnUIThread(() -> {
+                ArrayList<MediaController.PhotoEntry> results = queryResult == null ? new ArrayList<>() : queryResult.entries;
+                boolean removed = reconcileMissingMedia(volume, mediaId, queryResult);
                 if (sharedIndex != null) {
                     for (MediaController.PhotoEntry result : results) {
                         // Collection notifications are a reconciliation of new rows, not
@@ -203,20 +231,28 @@ public final class PagedGalleryIndex {
                 }
                 // A collection event can arrive while a screenshot/video is IS_PENDING.
                 // Even a successful query for older rows must retry the bounded window.
-                if ((results.isEmpty() || mediaId < 0) && attempt < MAX_MEDIA_QUERY_RETRIES && sharedIndex != null) {
+                if (!removed && (results.isEmpty() || mediaId < 0) && attempt < MAX_MEDIA_QUERY_RETRIES && sharedIndex != null) {
                     AndroidUtilities.runOnUIThread(() -> queryChangedMedia(context, uri, attempt + 1), 400L + attempt * 300L);
                 } else {
-                    queryingMediaUris.remove(requestKey);
-                    if (repeatMediaQueries.remove(requestKey)) {
-                        queryChangedMedia(context, uri, 0);
-                    }
-                    if (recentReconcileNeeded && queryingMediaUris.size() < MAX_REQUESTS) {
-                        recentReconcileNeeded = false;
-                        queryChangedMedia(context, null, 0);
-                    }
+                    finishMediaQuery(context, uri);
                 }
             });
         });
+    }
+
+    private static boolean reconcileMissingMedia(String volume, int mediaId, MediaQueryResult result) {
+        if (result == null || !result.emptyCursor || mediaId < 0 || sharedIndex == null || !sharedIndex.removeMediaEntry(volume, mediaId)) {
+            return false;
+        }
+        MediaController.removeGalleryEntry(volume, mediaId);
+        // Selection must be purged in the same UI turn, even during picker animations.
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.pagedGalleryItemDeleted, volume, mediaId);
+        return true;
+    }
+
+    private static final class MediaQueryResult {
+        final ArrayList<MediaController.PhotoEntry> entries = new ArrayList<>();
+        boolean emptyCursor;
     }
 
     private static int getMediaIdFromUri(Uri uri) {
@@ -239,8 +275,9 @@ public final class PagedGalleryIndex {
         return TextUtils.isEmpty(volume) ? "external" : volume;
     }
 
-    private static ArrayList<MediaController.PhotoEntry> queryMediaEntries(Context context, String requestedVolume, int mediaId) {
-        ArrayList<MediaController.PhotoEntry> entries = new ArrayList<>();
+    private static MediaQueryResult queryMediaEntries(Context context, String requestedVolume, int mediaId) {
+        MediaQueryResult result = new MediaQueryResult();
+        ArrayList<MediaController.PhotoEntry> entries = result.entries;
         ContentResolver resolver = context.getContentResolver();
         String volume = Build.VERSION.SDK_INT >= 29 ? requestedVolume : "external";
         Uri filesUri = MediaStore.Files.getContentUri(volume);
@@ -293,8 +330,9 @@ public final class PagedGalleryIndex {
                 cursor = resolver.query(filesUri, projection, selection, selectionArgs, order + " LIMIT " + limit);
             }
             if (cursor == null) {
-                return entries;
+                return result;
             }
+            result.emptyCursor = cursor.getCount() == 0;
             int rows = 0;
             while (rows++ < limit && cursor.moveToNext()) {
                 int id = cursor.getInt(0);
@@ -329,7 +367,7 @@ public final class PagedGalleryIndex {
                 entry.bucketName = bucketName;
                 entries.add(entry);
                 }
-            return entries;
+            return result;
         } finally {
             if (cursor != null) {
                 cursor.close();
@@ -355,6 +393,73 @@ public final class PagedGalleryIndex {
         String volume = Build.VERSION.SDK_INT >= 29 ? entry.mediaStoreUri.getPathSegments().get(0) : "external";
         SparseIntArray positions = basePositionsByVolume.get(volume);
         return positions != null && positions.indexOfKey(entry.imageId) >= 0;
+    }
+
+    private static boolean matchesVolume(String requested, String actual) {
+        // "external" is MediaStore's aggregate of primary and removable volumes.
+        return requested.equals(actual) || "external".equals(requested) && !"internal".equals(actual);
+    }
+
+    public static boolean matchesMediaEntry(String volume, int id, MediaController.PhotoEntry entry) {
+        // Legacy album/selection entries have only the MediaStore row ID.
+        return entry != null && entry.imageId == id && (entry.mediaStoreUri == null
+                || matchesVolume(volume, getVolumeFromUri(entry.mediaStoreUri)));
+    }
+
+    private boolean removeMediaEntry(String volume, int id) {
+        if (closed) {
+            return false;
+        }
+        HashSet<Integer> removedPositions = new HashSet<>();
+        boolean found = false;
+        for (Map.Entry<String, SparseIntArray> item : basePositionsByVolume.entrySet()) {
+            SparseIntArray positions = item.getValue();
+            if (matchesVolume(volume, item.getKey()) && positions.indexOfKey(id) >= 0) {
+                found = true;
+                int global = positions.get(id);
+                if (global >= 0) {
+                    removedPositions.add(global);
+                    cache.remove(global);
+                    unavailable.remove(global);
+                }
+                positions.delete(id);
+                recentByKey.remove(mediaKey(item.getKey(), id));
+            }
+        }
+        if (!found) {
+            return false;
+        }
+        // Keep global row IDs stable for in-flight pages; compact only album positions.
+        HashSet<Album> affected = new HashSet<>(albums);
+        affected.addAll(photoAlbums);
+        affected.add(allMedia);
+        affected.add(allPhotos);
+        affected.add(allVideos);
+        for (Album album : affected) {
+            album.positions.removeAll(removedPositions);
+            album.recentEntries.removeIf(entry -> matchesMediaEntry(volume, id, entry));
+            if (matchesMediaEntry(volume, id, album.coverPhoto)) {
+                album.coverPhoto = getCachedPhoto(album, 0);
+                if (album.coverPhoto == null && album.size() > 0) {
+                    requestPage(album, 0, new Listener() {
+                        @Override
+                        public void onIndexReady(PagedGalleryIndex index) {
+                        }
+
+                        @Override
+                        public void onPageReady() {
+                            album.coverPhoto = getCachedPhoto(album, 0);
+                            if (album.coverPhoto != null) {
+                                NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.pagedGalleryItemChanged, album.coverPhoto, false);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        albums.removeIf(album -> album != allMedia && album.size() == 0);
+        photoAlbums.removeIf(album -> album != allPhotos && album.size() == 0);
+        return true;
     }
 
     private boolean applyMediaEntry(MediaController.PhotoEntry entry) {
@@ -391,8 +496,14 @@ public final class PagedGalleryIndex {
         insertRecent(allMedia, entry);
         if (entry.isVideo) {
             insertRecent(allVideos, entry);
+            if (!albums.contains(allVideos)) {
+                albums.add(albums.contains(allPhotos) ? 2 : 1, allVideos);
+            }
         } else {
             insertRecent(allPhotos, entry);
+            if (!albums.contains(allPhotos)) {
+                albums.add(1, allPhotos);
+            }
         }
 
         Album bucket = entry.bucketId == 0 ? allMedia : findBucket(albums, entry.bucketId, false);
@@ -508,9 +619,6 @@ public final class PagedGalleryIndex {
         if (global < 0) {
             return -1;
         }
-        if (album.allMedia) {
-            return album.recentEntries.size() + global;
-        }
         int local = Arrays.binarySearch(album.positions.values, 0, album.positions.size, global);
         return local < 0 ? -1 : album.recentEntries.size() + local;
     }
@@ -609,14 +717,16 @@ public final class PagedGalleryIndex {
     }
 
     private static void processDeferredMediaChanges(Context context) {
-        if (pendingMediaUris.isEmpty()) {
+        if (sharedIndex == null || !hasGalleryPermission(context)) {
             return;
         }
-        ArrayList<Uri> changes = new ArrayList<>(pendingMediaUris);
-        pendingMediaUris.clear();
-        for (Uri changedUri : changes) {
+        for (Uri changedUri : takePendingMediaQueries()) {
             queryChangedMedia(context, changedUri, 0);
         }
+    }
+
+    public static boolean isSharedIndexActive() {
+        return mediaStoreObserver != null && (sharedIndex != null && !sharedIndex.closed || sharedSignal != null);
     }
 
     public interface Listener {
@@ -646,7 +756,7 @@ public final class PagedGalleryIndex {
         }
 
         private int globalPosition(int position) {
-            return allMedia ? position : positions.values[position];
+            return positions.values[position];
         }
     }
 
@@ -661,6 +771,19 @@ public final class PagedGalleryIndex {
                 values = bigger;
             }
             values[size++] = value;
+        }
+
+        private void removeAll(HashSet<Integer> removed) {
+            if (removed.isEmpty()) {
+                return;
+            }
+            int remaining = 0;
+            for (int i = 0; i < size; i++) {
+                if (!removed.contains(values[i])) {
+                    values[remaining++] = values[i];
+                }
+            }
+            size = remaining;
         }
     }
 
@@ -1072,6 +1195,11 @@ public final class PagedGalleryIndex {
                     return;
                 }
                 for (int global : positions) {
+                    SparseIntArray active = basePositionsByVolume.get(volumes[global]);
+                    if (active == null || active.get(ids[global], -1) != global) {
+                        // A deletion/reinsertion may have happened after this page query.
+                        continue;
+                    }
                     MediaController.PhotoEntry entry = loaded.get(mediaKey(volumes[global], ids[global]));
                     if (entry != null) {
                         cache.put(global, entry);

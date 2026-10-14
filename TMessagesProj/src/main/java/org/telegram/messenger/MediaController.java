@@ -130,6 +130,7 @@ import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -1272,6 +1273,10 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
 
         private void scheduleReloadRunnable() {
             AndroidUtilities.runOnUIThread(refreshGalleryRunnable = () -> {
+                if (PagedGalleryIndex.isSharedIndexActive()) {
+                    refreshGalleryRunnable = null;
+                    return;
+                }
                 if (PhotoViewer.getInstance().isVisible()) {
                     scheduleReloadRunnable();
                     return;
@@ -1284,10 +1289,15 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         @Override
         public void onChange(boolean selfChange) {
             super.onChange(selfChange);
-            if (refreshGalleryRunnable != null) {
-                AndroidUtilities.cancelRunOnUIThread(refreshGalleryRunnable);
-            }
-            scheduleReloadRunnable();
+            AndroidUtilities.runOnUIThread(() -> {
+                if (PagedGalleryIndex.isSharedIndexActive()) {
+                    return;
+                }
+                if (refreshGalleryRunnable != null) {
+                    AndroidUtilities.cancelRunOnUIThread(refreshGalleryRunnable);
+                }
+                scheduleReloadRunnable();
+            });
         }
     }
 
@@ -1299,13 +1309,18 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         @Override
         public void onChange(boolean selfChange) {
             super.onChange(selfChange);
-            if (refreshGalleryRunnable != null) {
-                AndroidUtilities.cancelRunOnUIThread(refreshGalleryRunnable);
-            }
-            AndroidUtilities.runOnUIThread(refreshGalleryRunnable = () -> {
-                refreshGalleryRunnable = null;
-                reloadGalleryPhotosAlbums(0);
-            }, 2000);
+            AndroidUtilities.runOnUIThread(() -> {
+                if (PagedGalleryIndex.isSharedIndexActive()) {
+                    return;
+                }
+                if (refreshGalleryRunnable != null) {
+                    AndroidUtilities.cancelRunOnUIThread(refreshGalleryRunnable);
+                }
+                AndroidUtilities.runOnUIThread(refreshGalleryRunnable = () -> {
+                    refreshGalleryRunnable = null;
+                    reloadGalleryPhotosAlbums(0);
+                }, 2000);
+            });
         }
     }
 
@@ -6603,8 +6618,48 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, 0, allMediaAlbums, allPhotoAlbums, null);
     }
 
+    public static void removeGalleryEntry(String volume, int id) {
+        HashSet<AlbumEntry> albums = new HashSet<>(allMediaAlbums);
+        albums.addAll(allPhotoAlbums);
+        if (allMediaAlbumEntry != null) albums.add(allMediaAlbumEntry);
+        if (allPhotosAlbumEntry != null) albums.add(allPhotosAlbumEntry);
+        if (allVideosAlbumEntry != null) albums.add(allVideosAlbumEntry);
+        for (AlbumEntry album : albums) {
+            boolean removed = album.photos.removeIf(entry -> PagedGalleryIndex.matchesMediaEntry(volume, id, entry));
+            if (removed) {
+                PhotoEntry indexed = album.photosByIds.get(id);
+                if (PagedGalleryIndex.matchesMediaEntry(volume, id, indexed)) {
+                    album.photosByIds.remove(id);
+                    for (PhotoEntry entry : album.photos) {
+                        if (entry.imageId == id) {
+                            album.photosByIds.put(id, entry);
+                            break;
+                        }
+                    }
+                }
+                if (PagedGalleryIndex.matchesMediaEntry(volume, id, album.coverPhoto)) {
+                    album.coverPhoto = album.photos.isEmpty() ? null : album.photos.get(0);
+                }
+            }
+        }
+        allMediaAlbums.removeIf(album -> album.bucketId != 0 && album.photos.isEmpty());
+        allPhotoAlbums.removeIf(album -> album.bucketId != 0 && album.photos.isEmpty());
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.albumsDidLoad, 0, allMediaAlbums, allPhotoAlbums, null);
+    }
+
     private static void reloadGalleryPhotosAlbums(final int guid) {
-        AndroidUtilities.runOnUIThread(() -> PagedGalleryIndex.onGalleryChanged(ApplicationLoader.applicationContext));
+        AndroidUtilities.runOnUIThread(() -> {
+            // The registered paged observer already receives the item URI. A legacy
+            // full scan here would duplicate that work (including delayed reloads).
+            if (PagedGalleryIndex.isSharedIndexActive()) {
+                return;
+            }
+            PagedGalleryIndex.onGalleryChanged(ApplicationLoader.applicationContext);
+            reloadLegacyGalleryPhotosAlbums(guid);
+        });
+    }
+
+    private static void reloadLegacyGalleryPhotosAlbums(final int guid) {
         synchronized (galleryLoadLock) {
             if (!pendingGalleryGuids.contains(guid)) {
                 pendingGalleryGuids.add(guid);
@@ -6850,7 +6905,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     pendingGalleryGuids.add(guid);
                 }
                 notificationGuids = new ArrayList<>(pendingGalleryGuids);
-                reloadAfterCurrent = galleryReloadPending;
+                reloadAfterCurrent = galleryReloadPending && !PagedGalleryIndex.isSharedIndexActive();
                 galleryReloadPending = false;
                 if (reloadAfterCurrent) {
                     if (!pendingGalleryGuids.contains(0)) {
