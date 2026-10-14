@@ -4,6 +4,8 @@ import static org.telegram.messenger.AndroidUtilities.dp;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.DialogInterface;
+import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -21,6 +23,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.ImageLocation;
+import org.telegram.messenger.ImageReceiver;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.R;
@@ -30,15 +33,22 @@ import org.telegram.ui.ActionBar.Theme;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 
 /** A dialog above the current chat or shared-media screen; opening it never navigates. */
-public final class SelectionOrderSheet {
+public final class SelectionOrderSheet extends BottomSheet {
     private static final int PREVIEW_SIZE = 96;
     private static final int ROW_HEIGHT = 120;
-
-    private SelectionOrderSheet() {
-    }
+    private static final Object ORDER_PAYLOAD = new Object();
+    private final ArrayList<MessageObject> orderedMessages;
+    private final RecyclerView recyclerView;
+    private final ItemTouchHelper touchHelper;
+    private Consumer<ArrayList<MessageObject>> onOrderChanged;
+    private Consumer<MessageObject> onPreview;
+    private MessageObject pendingPreview;
+    private boolean dragging;
+    private boolean released;
 
     public static void show(Activity activity, ArrayList<MessageObject> messages,
                             Theme.ResourcesProvider resourcesProvider,
@@ -47,8 +57,19 @@ public final class SelectionOrderSheet {
         if (activity == null || messages.isEmpty()) {
             return;
         }
-        ArrayList<MessageObject> orderedMessages = new ArrayList<>(messages);
-        RecyclerView recyclerView = new RecyclerView(activity);
+        new SelectionOrderSheet(activity, messages, resourcesProvider, onOrderChanged, onPreview).show();
+    }
+
+    private SelectionOrderSheet(Activity activity, ArrayList<MessageObject> messages,
+                                Theme.ResourcesProvider resources,
+                                Consumer<ArrayList<MessageObject>> orderChanged,
+                                Consumer<MessageObject> preview) {
+        super(activity, false, resources);
+        fixNavigationBar();
+        onOrderChanged = orderChanged;
+        onPreview = preview;
+        orderedMessages = new ArrayList<>(messages);
+        recyclerView = new RecyclerView(activity);
         recyclerView.setLayoutManager(new LinearLayoutManager(activity));
         recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         recyclerView.setBackgroundColor(Theme.getColor(Theme.key_dialogBackground, resourcesProvider));
@@ -56,11 +77,10 @@ public final class SelectionOrderSheet {
         int maximumHeight = AndroidUtilities.displaySize.y > 0 ? AndroidUtilities.displaySize.y * 2 / 3 : dp(520);
         int listHeight = Math.min(maximumHeight, orderedMessages.size() * dp(ROW_HEIGHT) + dp(8));
         recyclerView.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
-        BottomSheet[] sheetRef = new BottomSheet[1];
         RecyclerView.Adapter<RecyclerView.ViewHolder> adapter = new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             @Override
             public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-                return new RecyclerView.ViewHolder(new SelectionOrderRow(activity, resourcesProvider)) {};
+                return new RecyclerView.ViewHolder(new SelectionOrderRow(parent.getContext(), SelectionOrderSheet.this.resourcesProvider)) {};
             }
 
             @Override
@@ -68,15 +88,42 @@ public final class SelectionOrderSheet {
                 MessageObject message = orderedMessages.get(position);
                 SelectionOrderRow row = (SelectionOrderRow) holder.itemView;
                 row.setMessage(message, position + 1);
+                row.setPreviewPaused(dragging);
                 boolean canPreview = message.isPhoto() || message.isVideo() || message.isGif();
                 row.setClickable(canPreview);
                 row.setOnClickListener(canPreview ? v -> {
-                    BottomSheet sheet = sheetRef[0];
-                    if (sheet != null) {
-                        sheet.setOnDismissListener(() -> onPreview.accept(message));
-                        sheet.dismiss();
+                    if (!released && !isDismissed() && onPreview != null) {
+                        pendingPreview = message;
+                        dismiss();
                     }
                 } : null);
+            }
+
+            @Override
+            public void onBindViewHolder(RecyclerView.ViewHolder holder, int position, List<Object> payloads) {
+                if (!payloads.isEmpty() && payloads.contains(ORDER_PAYLOAD)) {
+                    ((SelectionOrderRow) holder.itemView).setOrder(position + 1);
+                } else {
+                    onBindViewHolder(holder, position);
+                }
+            }
+
+            @Override
+            public void onViewAttachedToWindow(RecyclerView.ViewHolder holder) {
+                super.onViewAttachedToWindow(holder);
+                ((SelectionOrderRow) holder.itemView).setPreviewPaused(dragging || released);
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(RecyclerView.ViewHolder holder) {
+                ((SelectionOrderRow) holder.itemView).setPreviewPaused(true);
+                super.onViewDetachedFromWindow(holder);
+            }
+
+            @Override
+            public void onViewRecycled(RecyclerView.ViewHolder holder) {
+                ((SelectionOrderRow) holder.itemView).clearPreview();
+                super.onViewRecycled(holder);
             }
 
             @Override
@@ -85,22 +132,39 @@ public final class SelectionOrderSheet {
             }
         };
         recyclerView.setAdapter(adapter);
-        new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
+        touchHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
             @Override
             public boolean onMove(@NonNull RecyclerView recycler, @NonNull RecyclerView.ViewHolder source,
                                   @NonNull RecyclerView.ViewHolder target) {
                 int from = source.getAdapterPosition();
                 int to = target.getAdapterPosition();
-                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION || from == to) {
+                if (released || from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION || from == to) {
                     return false;
                 }
                 // Move through the list rather than exchanging distant endpoints.
                 MessageObject moved = orderedMessages.remove(from);
                 orderedMessages.add(to, moved);
                 adapter.notifyItemMoved(from, to);
-                adapter.notifyItemRangeChanged(Math.min(from, to), Math.abs(from - to) + 1);
-                onOrderChanged.accept(new ArrayList<>(orderedMessages));
+                adapter.notifyItemRangeChanged(Math.min(from, to), Math.abs(from - to) + 1, ORDER_PAYLOAD);
+                if (onOrderChanged != null) {
+                    onOrderChanged.accept(new ArrayList<>(orderedMessages));
+                }
                 return true;
+            }
+
+            @Override
+            public void onSelectedChanged(RecyclerView.ViewHolder holder, int actionState) {
+                super.onSelectedChanged(holder, actionState);
+                dragging = actionState == ItemTouchHelper.ACTION_STATE_DRAG;
+                for (int i = 0; i < recyclerView.getChildCount(); i++) {
+                    ((SelectionOrderRow) recyclerView.getChildAt(i)).setPreviewPaused(dragging || released);
+                }
+            }
+
+            @Override
+            public void clearView(@NonNull RecyclerView recycler, @NonNull RecyclerView.ViewHolder holder) {
+                super.clearView(recycler, holder);
+                ((SelectionOrderRow) holder.itemView).setPreviewPaused(dragging || released);
             }
 
             @Override
@@ -111,18 +175,60 @@ public final class SelectionOrderSheet {
             @Override
             public void onSwiped(@NonNull RecyclerView.ViewHolder holder, int direction) {
             }
-        }).attachToRecyclerView(recyclerView);
-        sheetRef[0] = new BottomSheet.Builder(activity, false, resourcesProvider)
-                .setTitle(LocaleController.formatString(R.string.SelectionOrderTitle, orderedMessages.size()))
-                .setCustomView(recyclerView)
-                .create();
-        sheetRef[0].show();
+        });
+        touchHelper.attachToRecyclerView(recyclerView);
+        setTitle(LocaleController.formatString(R.string.SelectionOrderTitle, orderedMessages.size()));
+        setCustomView(recyclerView);
+    }
+
+    @Override
+    public void dismissInternal() {
+        if (released) {
+            return;
+        }
+        released = true;
+        MessageObject message = pendingPreview;
+        Consumer<MessageObject> preview = message == null ? null : onPreview;
+        pendingPreview = null;
+        onOrderChanged = null;
+        onPreview = null;
+        setDelegate(null);
+        setOnHideListener(null);
+        // The Runnable overload ignores null, so clear the Dialog listener explicitly.
+        setOnDismissListener((DialogInterface.OnDismissListener) null);
+        setOnCancelListener(null);
+        setOnShowListener(null);
+
+        recyclerView.stopScroll();
+        if (recyclerView.getItemAnimator() != null) {
+            recyclerView.getItemAnimator().endAnimations();
+        }
+        for (int i = 0; i < recyclerView.getChildCount(); i++) {
+            ((SelectionOrderRow) recyclerView.getChildAt(i)).clearPreview();
+        }
+        // Recycle children before detaching the helper so an active drag is ended too.
+        recyclerView.setAdapter(null);
+        touchHelper.attachToRecyclerView(null);
+        recyclerView.getRecycledViewPool().clear();
+        orderedMessages.clear();
+        setCustomView(null);
+        try {
+            super.dismissInternal();
+        } finally {
+            resourcesProvider = null;
+        }
+        if (preview != null) {
+            preview.accept(message);
+        }
     }
 
     private static final class SelectionOrderRow extends LinearLayout {
         private final TextView numberView;
         private final BackupImageView imageView;
         private final TextView descriptionView;
+        private boolean previewPaused;
+        private boolean allowAnimationBeforePause;
+        private boolean resumeAnimation;
 
         SelectionOrderRow(Context context, Theme.ResourcesProvider resourcesProvider) {
             super(context);
@@ -162,7 +268,7 @@ public final class SelectionOrderSheet {
         }
 
         void setMessage(MessageObject message, int order) {
-            numberView.setText(String.valueOf(order));
+            setOrder(order);
             CharSequence description = message.messageText;
             TLRPC.MessageMedia media = message.messageOwner == null ? null : MessageObject.getMedia(message.messageOwner);
             if (TextUtils.isEmpty(description)) {
@@ -203,6 +309,48 @@ public final class SelectionOrderSheet {
                     }
                 }
             }
+        }
+
+        void setOrder(int order) {
+            numberView.setText(String.valueOf(order));
+        }
+
+        void setPreviewPaused(boolean paused) {
+            if (previewPaused == paused) {
+                return;
+            }
+            previewPaused = paused;
+            ImageReceiver receiver = imageView.getImageReceiver();
+            if (paused) {
+                allowAnimationBeforePause = receiver.getAllowStartAnimation();
+                resumeAnimation = receiver.isAnimationRunning();
+                receiver.setAllowStartAnimation(false);
+                receiver.stopAnimation();
+            } else {
+                receiver.setAllowStartAnimation(allowAnimationBeforePause);
+                if (allowAnimationBeforePause || resumeAnimation) {
+                    receiver.startAnimation();
+                }
+                resumeAnimation = false;
+            }
+        }
+
+        void clearPreview() {
+            setOnClickListener(null);
+            setClickable(false);
+            descriptionView.setText(null);
+            numberView.setText(null);
+            previewPaused = false;
+            resumeAnimation = false;
+            allowAnimationBeforePause = false;
+            ImageReceiver receiver = imageView.getImageReceiver();
+            receiver.setAllowStartAnimation(false);
+            receiver.stopAnimation();
+            receiver.clearImage();
+            // A detached receiver also keeps a reload backup and its MessageObject.
+            receiver.setAllowLoadingOnAttachedOnly(false);
+            receiver.setImage(null, null, null, null, (Drawable) null, null, 0);
+            receiver.setAllowLoadingOnAttachedOnly(true);
         }
     }
 }

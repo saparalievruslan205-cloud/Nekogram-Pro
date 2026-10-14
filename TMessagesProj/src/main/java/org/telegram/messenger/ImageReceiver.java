@@ -215,6 +215,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
             thumbLocation = null;
             mediaLocation = null;
             thumb = null;
+            parentObject = null;
         }
     }
 

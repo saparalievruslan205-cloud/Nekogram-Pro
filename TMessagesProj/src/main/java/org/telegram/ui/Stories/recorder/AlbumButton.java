@@ -37,13 +37,17 @@ public class AlbumButton extends View {
     private final Rect visibleRect = new Rect();
     private boolean coverRequested;
     private int coverRetryCount;
+    private boolean scrollCheckScheduled;
     private ViewTreeObserver coverObserver;
-    private final ViewTreeObserver.OnScrollChangedListener coverScrollListener = this::updateCoverVisibility;
-    private final Runnable updateCover = this::updateCoverVisibility;
+    private final ViewTreeObserver.OnScrollChangedListener coverScrollListener = this::scheduleCoverVisibilityCheck;
+    private final Runnable updateCover = () -> {
+        scrollCheckScheduled = false;
+        updateCoverVisibility();
+    };
     private final Runnable retryCover = () -> {
-        if (isAttachedToWindow() && getGlobalVisibleRect(visibleRect)) {
+        if (isAttachedToWindow()) {
             coverRequested = false;
-            requestCoverIfVisible();
+            scheduleCoverVisibilityCheck();
         }
     };
 
@@ -83,7 +87,7 @@ public class AlbumButton extends View {
         coverFilter = imageSize + "_" + imageSize;
         imageReceiver.setImageBitmap(noGalleryDrawable);
         imageReceiver.setDelegate((receiver, set, thumb, memCache) -> {
-            if (!set && coverRequested && cover != null && coverRetryCount < 2 && isAttachedToWindow()) {
+            if (!set && coverRequested && this.cover != null && coverRetryCount < 2 && isAttachedToWindow()) {
                 coverRetryCount++;
                 removeCallbacks(retryCover);
                 postDelayed(retryCover, 450L * coverRetryCount);
@@ -93,12 +97,19 @@ public class AlbumButton extends View {
         setContentDescription(title + (count > 0 ? " " + LocaleController.formatPluralStringComma("Media", count) : ""));
     }
 
+    private void scheduleCoverVisibilityCheck() {
+        if (!scrollCheckScheduled && isAttachedToWindow()) {
+            scrollCheckScheduled = true;
+            postOnAnimation(updateCover);
+        }
+    }
+
     private void updateCoverVisibility() {
         if (!isAttachedToWindow()) {
             return;
         }
         if (getGlobalVisibleRect(visibleRect)) {
-            requestCoverIfVisible();
+            requestCover();
         } else if (coverRequested) {
             // The popup uses a ScrollView, which can reuse child display lists on scroll.
             // Load newly visible covers explicitly and release thumbnails outside the viewport.
@@ -108,8 +119,8 @@ public class AlbumButton extends View {
         }
     }
 
-    private void requestCoverIfVisible() {
-        if (coverRequested || !getGlobalVisibleRect(visibleRect)) {
+    private void requestCover() {
+        if (coverRequested) {
             return;
         }
         coverRequested = true;
@@ -135,9 +146,7 @@ public class AlbumButton extends View {
         coverRequested = false;
         coverRetryCount = 0;
         imageReceiver.setImageBitmap(noGalleryDrawable);
-        if (isAttachedToWindow()) {
-            requestCoverIfVisible();
-        }
+        scheduleCoverVisibilityCheck();
         invalidate();
     }
 
@@ -156,8 +165,10 @@ public class AlbumButton extends View {
         super.onAttachedToWindow();
         imageReceiver.onAttachedToWindow();
         coverObserver = getViewTreeObserver();
-        coverObserver.addOnScrollChangedListener(coverScrollListener);
-        post(updateCover);
+        if (coverObserver.isAlive()) {
+            coverObserver.addOnScrollChangedListener(coverScrollListener);
+        }
+        scheduleCoverVisibilityCheck();
     }
 
     @Override
@@ -169,17 +180,18 @@ public class AlbumButton extends View {
         }
         coverObserver = null;
         removeCallbacks(updateCover);
+        scrollCheckScheduled = false;
         removeCallbacks(retryCover);
-        imageReceiver.onDetachedFromWindow();
         coverRequested = false;
         coverRetryCount = 0;
+        imageReceiver.onDetachedFromWindow();
         imageReceiver.setImageBitmap(noGalleryDrawable);
     }
 
     @Override
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         super.onLayout(changed, left, top, right, bottom);
-        updateCoverVisibility();
+        scheduleCoverVisibilityCheck();
     }
     final float imageSize = 30;
 
@@ -211,7 +223,9 @@ public class AlbumButton extends View {
 
     @Override
     protected void dispatchDraw(Canvas canvas) {
-        requestCoverIfVisible();
+        if (!coverRequested) {
+            scheduleCoverVisibilityCheck();
+        }
         float x = getPaddingLeft();
         imageReceiver.setImageCoords(x, (getMeasuredHeight() - dp(imageSize)) / 2f, dp(imageSize), dp(imageSize));
         imageReceiver.draw(canvas);
