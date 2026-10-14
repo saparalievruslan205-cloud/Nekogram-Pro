@@ -389,6 +389,7 @@ public class ChatActivity extends BaseFragment implements
         LocationActivity.LocationActivityDelegate,
         ChatAttachAlertDocumentLayout.DocumentSelectActivityDelegate,
         ChatActivityInterface,
+        SaveToGalleryCommand.ProgressTarget,
         FloatingDebugProvider,
         InstantCameraView.Delegate,
         ForwardContext,
@@ -3519,6 +3520,7 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onFragmentDestroy() {
+        pendingGallerySaveMessages = null;
         super.onFragmentDestroy();
         if (messageMetricsView != null) {
             messageMetricsView.finish();
@@ -3988,7 +3990,11 @@ public class ChatActivity extends BaseFragment implements
                 } else if (id == selection_order) {
                     showSelectionOrderPreview();
                 } else if (id == save_gallery) {
-                    if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE) && getParentActivity() != null && getParentActivity().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    if (!SaveToGalleryCommand.canShowUi(ChatActivity.this)) {
+                        pendingGallerySaveMessages = null;
+                        return;
+                    }
+                    if (SaveToGalleryCommand.requiresWritePermission(getParentActivity())) {
                         pendingGallerySaveMessages = getSelectedGalleryMessages();
                         getParentActivity().requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
                         return;
@@ -19369,16 +19375,15 @@ public class ChatActivity extends BaseFragment implements
             mentionContainer.getAdapter().onRequestPermissionsResultFragment(requestCode, permissions, grantResults);
         }
         if (requestCode == BasePermissionsActivity.REQUEST_CODE_EXTERNAL_STORAGE) {
+            ArrayList<MessageObject> pending = pendingGallerySaveMessages;
+            pendingGallerySaveMessages = null;
             if (chatAttachAlert != null) {
                 chatAttachAlert.getPhotoLayout().checkStorage();
             }
             if (chatThemeBottomSheet != null && chatThemeBottomSheet.chatAttachAlert != null) {
                 chatThemeBottomSheet.chatAttachAlert.getPhotoLayout().checkStorage();
             }
-        } else if (requestCode == 4 && pendingGallerySaveMessages != null) {
-            ArrayList<MessageObject> pending = pendingGallerySaveMessages;
-            pendingGallerySaveMessages = null;
-            if (grantResults != null && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (pending != null && grantResults != null && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startGalleryBatchSave(pending);
             }
         } else if ((requestCode == BasePermissionsActivity.REQUEST_CODE_ATTACH_CONTACT || requestCode == 30) && chatAttachAlert != null) {
@@ -19749,6 +19754,9 @@ public class ChatActivity extends BaseFragment implements
 
     private void startGalleryBatchSave(ArrayList<MessageObject> messageObjects) {
         pendingGallerySaveMessages = null;
+        if (!SaveToGalleryCommand.canShowUi(this) || messageObjects.isEmpty()) {
+            return;
+        }
         for (int a = 0; a < 2; a++) {
             selectedMessagesIds[a].clear();
             selectedMessagesCanCopyIds[a].clear();
@@ -19758,17 +19766,12 @@ public class ChatActivity extends BaseFragment implements
         hideActionMode();
         updatePinnedMessageView(true);
         updateVisibleRows();
-        MediaController.saveGalleryFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (saved, failed, cancelled) -> {
-            if (getParentActivity() == null) {
-                return;
-            }
-            int resultId = cancelled ? R.string.GalleryBatchSaveCancelled : R.string.GalleryBatchSaveSummary;
-            CharSequence result = LocaleController.formatString(resultId, saved, failed);
-            BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.drawable.msg_gallery, result, "").show();
-        }, this::updateGallerySaveProgress);
+        SaveToGalleryCommand command = new SaveToGalleryCommand(this);
+        MediaController.saveGalleryFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, command, command);
     }
 
-    private void updateGallerySaveProgress(MessageObject messageObject, long loadedSize, long totalSize, boolean active) {
+    @Override
+    public void updateGallerySaveProgress(MessageObject messageObject, long loadedSize, long totalSize, boolean active) {
         if (chatListView == null || messageObject == null) {
             return;
         }

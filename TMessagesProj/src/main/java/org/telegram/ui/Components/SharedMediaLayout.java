@@ -80,7 +80,6 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
-import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLoader;
@@ -4099,11 +4098,11 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     private void saveSelectedMessagesToGallery() {
         Activity activity = profileActivity.getParentActivity();
         ArrayList<MessageObject> messages = getSelectedGalleryMessages();
-        if (activity == null || messages.isEmpty()) {
+        if (!SaveToGalleryCommand.canShowUi(profileActivity) || messages.isEmpty()) {
+            pendingGallerySaveMessages = null;
             return;
         }
-        if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE)
-                && activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+        if (SaveToGalleryCommand.requiresWritePermission(activity)) {
             pendingGallerySaveMessages = messages;
             activity.requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_CODE_GALLERY_SAVE);
             return;
@@ -4117,7 +4116,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         }
         ArrayList<MessageObject> messages = pendingGallerySaveMessages;
         pendingGallerySaveMessages = null;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && messages != null) {
+        if (grantResults != null && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && messages != null) {
             startGalleryBatchSave(messages);
         }
         return true;
@@ -4125,15 +4124,12 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
 
     private void startGalleryBatchSave(ArrayList<MessageObject> messages) {
         pendingGallerySaveMessages = null;
+        if (!SaveToGalleryCommand.canShowUi(profileActivity) || messages.isEmpty()) {
+            return;
+        }
         closeActionMode();
         MediaController.saveGalleryFilesFromMessages(profileActivity.getParentActivity(), profileActivity.getAccountInstance(), messages,
-                (saved, failed, cancelled) -> {
-                    if (profileActivity.getParentActivity() != null) {
-                        int resultId = cancelled ? R.string.GalleryBatchSaveCancelled : R.string.GalleryBatchSaveSummary;
-                        BulletinFactory.of(profileActivity).createSimpleBulletin(R.drawable.msg_gallery,
-                                LocaleController.formatString(resultId, saved, failed), "").show();
-                    }
-                });
+                new SaveToGalleryCommand(profileActivity));
     }
     private boolean hasNoforwardsMessage() {
         boolean hasNoforwardsMessage = false;

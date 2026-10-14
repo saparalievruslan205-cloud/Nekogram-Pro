@@ -54,7 +54,7 @@ public final class SelectionOrderSheet extends BottomSheet {
                             Theme.ResourcesProvider resourcesProvider,
                             Consumer<ArrayList<MessageObject>> onOrderChanged,
                             Consumer<MessageObject> onPreview) {
-        if (activity == null || messages.isEmpty()) {
+        if (activity == null || activity.isFinishing() || activity.isDestroyed() || messages.isEmpty()) {
             return;
         }
         new SelectionOrderSheet(activity, messages, resourcesProvider, onOrderChanged, onPreview).show();

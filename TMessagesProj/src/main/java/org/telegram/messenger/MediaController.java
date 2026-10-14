@@ -5455,7 +5455,8 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     public static void saveGalleryFilesFromMessages(Context context, AccountInstance accountInstance, ArrayList<MessageObject> messageObjects, GallerySaveCallback callback, GallerySaveProgressCallback progressCallback) {
         if (context == null || accountInstance == null || messageObjects == null || messageObjects.isEmpty()) {
             if (callback != null) {
-                AndroidUtilities.runOnUIThread(() -> callback.onFinished(0, messageObjects == null ? 0 : messageObjects.size(), false));
+                int failed = messageObjects == null ? 0 : messageObjects.size();
+                AndroidUtilities.runOnUIThread(() -> callback.onFinished(0, failed, false));
             }
             return;
         }
@@ -5501,8 +5502,8 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         private final Context context;
         private final AccountInstance accountInstance;
         private final ArrayList<MessageObject> messages;
-        private final GallerySaveCallback callback;
-        private final GallerySaveProgressCallback progressCallback;
+        private GallerySaveCallback callback;
+        private volatile GallerySaveProgressCallback progressCallback;
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean finished = new AtomicBoolean();
         private final Object loadLock = new Object();
@@ -5729,7 +5730,12 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     }
                     lastSaveProgressCallback = now;
                 }
-                AndroidUtilities.runOnUIThread(() -> progressCallback.onProgress(message, loaded, total, active));
+                AndroidUtilities.runOnUIThread(() -> {
+                    GallerySaveProgressCallback callback = progressCallback;
+                    if (callback != null) {
+                        callback.onProgress(message, loaded, total, active);
+                    }
+                });
             }
         }
 
@@ -5764,8 +5770,15 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 accountInstance.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadFailed);
                 accountInstance.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadProgressChanged);
                 SaveToDownloadReceiver.cancelNotification(notificationId);
-                if (callback != null) {
-                    callback.onFinished(savedCount, failedCount, cancelled.get());
+                GallerySaveCallback completion = callback;
+                callback = null;
+                progressCallback = null;
+                try {
+                    if (completion != null) {
+                        completion.onFinished(savedCount, failedCount, cancelled.get());
+                    }
+                } finally {
+                    messages.clear();
                 }
             });
         }

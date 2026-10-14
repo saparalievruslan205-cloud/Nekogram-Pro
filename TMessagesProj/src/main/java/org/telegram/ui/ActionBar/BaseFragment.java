@@ -501,7 +501,7 @@ public abstract class BaseFragment {
         return true;
     }
 
-    protected boolean isFinishing() {
+    public boolean isFinishing() {
         return finishing;
     }
 

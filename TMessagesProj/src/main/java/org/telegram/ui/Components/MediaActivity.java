@@ -143,6 +143,9 @@ public class MediaActivity extends BaseFragment implements SharedMediaLayout.Sha
 
     @Override
     public void onFragmentDestroy() {
+        if (sharedMediaLayout != null) {
+            sharedMediaLayout.onDestroy();
+        }
         super.onFragmentDestroy();
         getNotificationCenter().removeObserver(this, NotificationCenter.userInfoDidLoad);
         getNotificationCenter().removeObserver(this, NotificationCenter.currentUserPremiumStatusChanged);
