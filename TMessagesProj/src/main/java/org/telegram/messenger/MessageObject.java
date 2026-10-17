@@ -11979,6 +11979,9 @@ public class MessageObject {
         } else {
             attachPathExists = (flags & 1) != 0;
             mediaExists = (flags & 2) != 0;
+            if ((attachPathExists || mediaExists) && (isVideo() || isRoundVideo())) {
+                checkMediaExistance();
+            }
         }
     }
 
@@ -12013,15 +12016,15 @@ public class MessageObject {
         if (!mediaExists && type == TYPE_GIF || type == TYPE_VIDEO || type == TYPE_FILE || type == TYPE_VOICE || type == TYPE_MUSIC || type == TYPE_ROUND_VIDEO) {
             if (messageOwner.attachPath != null && messageOwner.attachPath.length() > 0) {
                 File f = new File(messageOwner.attachPath);
-                attachPathExists = f.exists();
+                attachPathExists = FileLoader.isDocumentFileComplete(getDocument(), f);
             }
             if (!attachPathExists) {
                 File file = FileLoader.getInstance(currentAccount).getPathToMessage(messageOwner, useFileDatabaseQueue);
                 if (type == TYPE_VIDEO && needDrawBluredPreview() || isVoiceOnce() || isRoundOnce()) {
-                    mediaExists = new File(file.getAbsolutePath() + ".enc").exists();
+                    mediaExists = FileLoader.isDocumentFileComplete(getDocument(), new File(file.getAbsolutePath() + ".enc"));
                 }
                 if (!mediaExists) {
-                    mediaExists = file.exists();
+                    mediaExists = FileLoader.isDocumentFileComplete(getDocument(), file);
                 }
             }
         }
@@ -12031,7 +12034,7 @@ public class MessageObject {
                 if (isWallpaper()) {
                     mediaExists = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, true, useFileDatabaseQueue).exists();
                 } else {
-                    mediaExists = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, false, useFileDatabaseQueue).exists();
+                    mediaExists = FileLoader.isDocumentFileComplete(document, FileLoader.getInstance(currentAccount).getPathToAttach(document, null, false, useFileDatabaseQueue));
                 }
             } else if (type == MessageObject.TYPE_TEXT) {
                 TLRPC.PhotoSize currentPhotoObject = FileLoader.getClosestPhotoSizeWithSize(photoThumbs, AndroidUtilities.getPhotoSize());

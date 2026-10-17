@@ -17467,6 +17467,10 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 radialProgress.setIcon(getIconForCurrentState(), ifSame, animated);
                 return;
             }
+            if ((currentMessageObject.isVideo() || currentMessageObject.isRoundVideo()) &&
+                    (currentMessageObject.mediaExists || currentMessageObject.attachPathExists)) {
+                currentMessageObject.checkMediaExistance();
+            }
             if (currentMessageObject.attachPathExists && !TextUtils.isEmpty(currentMessageObject.messageOwner.attachPath)) {
                 fileName = currentMessageObject.messageOwner.attachPath;
                 fileExists = true;

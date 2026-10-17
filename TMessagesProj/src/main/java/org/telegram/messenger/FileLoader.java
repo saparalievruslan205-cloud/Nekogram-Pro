@@ -1220,7 +1220,7 @@ public class FileLoader extends BaseController {
             }
             semaphore.countDown();
         });
-        awaitFileLoadOperation(semaphore, true);
+        awaitFileLoadOperation(semaphore);
         return result[0];
     }
 
@@ -1230,12 +1230,21 @@ public class FileLoader extends BaseController {
      * For cases when two {@link ImageReceiver} require loading of the same file and the first {@link ImageReceiver} decides to cancel the operation.
      * For example, to autoplay a video after sending a message.
      */
-    private void awaitFileLoadOperation(CountDownLatch latch, boolean ignoreInterruption) {
+    private void awaitFileLoadOperation(CountDownLatch latch) {
+        boolean interrupted = false;
         try {
-            latch.await();
-        } catch (Exception e) {
-            FileLog.e(e, false);
-            if (ignoreInterruption) awaitFileLoadOperation(latch, false);
+            while (true) {
+                try {
+                    latch.await();
+                    return;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -1353,6 +1362,55 @@ public class FileLoader extends BaseController {
             }
         }
         return new File("");
+    }
+
+    /** Checks a final video against its document size, even when stale temp/preload files exist. */
+    public static boolean isDocumentFileComplete(TLRPC.Document document, File file) {
+        if (document != null && (MessageObject.isVideoDocument(document) ||
+                MessageObject.isRoundVideoDocument(document) ||
+                document.mime_type != null && document.mime_type.startsWith("video/"))) {
+            return FileDownloadIntegrity.isFileComplete(file, document.size);
+        }
+        return file != null && file.exists();
+    }
+
+    public void discardCorruptVideo(TLRPC.Document document, File file, Runnable onDiscarded) {
+        File normal = getPathToAttach(document, false);
+        File cached = getPathToAttach(document, true);
+        boolean downloadedFile = file != null && file.isFile() && (file.equals(normal) || file.equals(cached)) &&
+                TextUtils.isEmpty(document.localPath) && !getFileDatabase().isLocallyCreated(file.toString());
+        // Stop writers before removing their temp file and range metadata. The files
+        // queue barrier also waits for any already scheduled final-file rename.
+        FileStreamLoadOperation.cancelStream(currentAccount, document.id);
+        getDownloadController().cancelDownloadFile(document);
+        String fileName = getAttachFileName(document);
+        LoadOperationUIObject uiObject = loadOperationPathsUI.remove(fileName);
+        if (uiObject != null && uiObject.loadInternalRunnable != null) {
+            fileLoaderQueue.cancelRunnable(uiObject.loadInternalRunnable);
+        }
+        Runnable discard = () -> {
+            if (downloadedFile) {
+                String prefix = document.dc_id + "_" + document.id;
+                File directory = getDirectory(MEDIA_DIR_CACHE);
+                File[] corruptFiles = {file, new File(directory, prefix + ".temp"),
+                        new File(directory, prefix + "_64.preload"), new File(directory, prefix + "_64.pt")};
+                for (File corrupt : corruptFiles) {
+                    if (corrupt.exists() && !corrupt.delete()) {
+                        FileLog.e("Unable to discard corrupt video cache " + corrupt);
+                    }
+                }
+            }
+            AndroidUtilities.runOnUIThread(onDiscarded);
+        };
+        fileLoaderQueue.postRunnable(() -> {
+            FileLoadOperation operation = loadOperationPaths.remove(fileName);
+            if (operation != null) {
+                operation.getQueue().cancel(operation, false);
+                operation.discardForRecovery(discard);
+            } else {
+                Utilities.stageQueue.postRunnable(() -> FileLoadOperation.filesQueue.postRunnable(discard));
+            }
+        });
     }
 
     public File getPathToAttach(TLObject attach) {

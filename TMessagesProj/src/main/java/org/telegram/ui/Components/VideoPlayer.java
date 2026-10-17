@@ -59,8 +59,8 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.exoplayer.audio.TeeAudioProcessor;
 import androidx.media3.exoplayer.dash.DashMediaSource;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
-import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException;
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer;
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.mediacodec.MediaCodecUtil;
 import androidx.media3.exoplayer.source.LoopingMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -129,6 +129,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     public interface VideoPlayerDelegate {
         void onStateChanged(boolean playWhenReady, int playbackState);
         void onError(VideoPlayer player, Exception e);
+        default void onPlayerRecreated(ExoPlayer player) {
+        }
         void onVideoSizeChanged(int width, int height, int unappliedRotationDegrees, float pixelWidthHeightRatio);
         void onRenderedFirstFrame();
         default void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {
@@ -167,6 +169,12 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     public boolean allowMultipleInstances;
 
     private boolean triedReinit;
+    private boolean preferSoftwareDecoder;
+    private boolean triedSurfaceReinit;
+    private boolean released;
+    private long reprepareOnPlayPosition = C.TIME_UNSET;
+    private long videoByteOffset;
+    private TLRPC.Document currentDocument;
 
     private Uri currentUri;
 
@@ -256,8 +264,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             } else {
                 factory = new DefaultRenderersFactory(ApplicationLoader.applicationContext);
             }
-            factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
-            // factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+            configureRenderersFactory(factory, preferSoftwareDecoder);
             ExoPlayer.Builder builder = new ExoPlayer.Builder(ApplicationLoader.applicationContext).setRenderersFactory(factory)
                     .setTrackSelector(trackSelector)
                     .setLoadControl(loadControl);
@@ -265,6 +272,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 builder.setLooper(looper);
             }
             player = builder.build();
+            if (workerQueue != null) {
+                player.setWorkerQueue(workerQueue::postRunnable);
+            }
 
             player.addAnalyticsListener(this);
             player.addListener(this);
@@ -299,7 +309,26 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         }
     }
 
+    static void configureRenderersFactory(DefaultRenderersFactory factory, boolean preferSoftware) {
+        factory.setExtensionRendererMode(preferSoftware ? DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER :
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
+        factory.setEnableDecoderFallback(true);
+        if (preferSoftware) {
+            // Extension video renderers are optional. Also prefer Android's software
+            // MediaCodec implementations instead of selecting the failed hardware codec again.
+            factory.setMediaCodecSelector((mime, secure, tunneling) -> {
+                List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> codecs =
+                        new ArrayList<>(MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling));
+                codecs.removeIf(codec -> !codec.softwareOnly);
+                return codecs;
+            });
+        }
+    }
+
     public void preparePlayerLoop(Uri videoUri, String videoType, Uri audioUri, String audioType) {
+        currentDocument = null;
+        videoByteOffset = 0;
+        reprepareOnPlayPosition = C.TIME_UNSET;
         this.videoQualities = null;
         this.videoQualityToSelect = null;
         this.videoUri = videoUri;
@@ -341,10 +370,14 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     private MediaSource mediaSourceFromUri(VideoUri videoUri, String type) {
+        currentDocument = videoUri.document;
         return mediaSourceFromUri(videoUri.uri, videoUri.fileVideoOffset, type);
     }
 
     private MediaSource mediaSourceFromUri(Uri uri, long videoByteOffset, String type) {
+        if (!mixedAudio || Objects.equals(uri, videoUri)) {
+            currentUri = uri;
+        }
         final MediaItem mediaItem = new MediaItem.Builder().setUri(uri).build();
         if (videoByteOffset != 0) {
             return new ProgressiveMediaSource.Factory(
@@ -375,6 +408,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(Uri uri, String type, int priority, long videoByteOffset) {
+        this.videoByteOffset = videoByteOffset;
+        this.currentDocument = null;
+        reprepareOnPlayPosition = C.TIME_UNSET;
         this.videoQualities = null;
         this.videoQualityToSelect = null;
         this.videoUri = uri;
@@ -397,6 +433,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(ArrayList<Quality> qualities, Quality select) {
+        currentDocument = null;
+        videoByteOffset = 0;
+        reprepareOnPlayPosition = C.TIME_UNSET;
         this.videoQualities = qualities;
         this.videoQualityToSelect = select;
         this.videoUri = null;
@@ -574,10 +613,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public TLRPC.Document getCurrentDocument() {
-        if (player == null) return null;
+        if (player == null) return currentDocument;
         final Format format = player.getVideoFormat();
         if (format == null || format.documentId == 0)
-            return null;
+            return currentDocument;
         if (videoQualities != null) {
             for (Quality q : videoQualities) {
                 for (VideoUri u : q.uris) {
@@ -586,7 +625,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 }
             }
         }
-        return null;
+        return currentDocument;
     }
 
     public int getCurrentQualityIndex() {
@@ -1203,6 +1242,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         public boolean original;
         public long docId;
         public Uri uri;
+        private Uri streamingUri;
         public long manifestDocId;
         public Uri m3u8uri;
         public long fileVideoOffset;
@@ -1211,7 +1251,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         public TLRPC.Document manifestDocument;
 
         public boolean isCached() {
-            return uri != null && "file".equalsIgnoreCase(uri.getScheme());
+            return uri != null && "file".equalsIgnoreCase(uri.getScheme()) &&
+                    uri.getPath() != null && FileLoader.isDocumentFileComplete(document, new File(uri.getPath()));
         }
 
         public boolean isManifestCached() {
@@ -1220,13 +1261,19 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
         public void updateCached(boolean useFileDatabaseQueue) {
             if (!isCached() && document != null) {
+                if (streamingUri != null) {
+                    this.uri = streamingUri;
+                    mediaItem = null;
+                }
                 File file = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, false, useFileDatabaseQueue);
-                if (file != null && file.exists()) {
+                if (FileLoader.isDocumentFileComplete(document, file)) {
                     this.uri = Uri.fromFile(file);
+                    mediaItem = null;
                 } else {
                     file = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, true, useFileDatabaseQueue);
-                    if (file != null && file.exists()) {
+                    if (FileLoader.isDocumentFileComplete(document, file)) {
                         this.uri = Uri.fromFile(file);
+                        mediaItem = null;
                     }
                 }
             }
@@ -1281,6 +1328,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             videoUri.document = document;
             videoUri.docId = document.id;
             videoUri.uri = getUri(currentAccount, document, reference);
+            videoUri.streamingUri = videoUri.uri;
             if (manifest != null) {
                 videoUri.manifestDocument = manifest;
                 videoUri.manifestDocId = manifest.id;
@@ -1307,11 +1355,11 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             }
 
             File file = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, false, useFileDatabaseQueue);
-            if (file != null && file.exists()) {
+            if (FileLoader.isDocumentFileComplete(document, file)) {
                 videoUri.uri = Uri.fromFile(file);
             } else {
                 file = FileLoader.getInstance(currentAccount).getPathToAttach(document, null, true, useFileDatabaseQueue);
-                if (file != null && file.exists()) {
+                if (FileLoader.isDocumentFileComplete(document, file)) {
                     videoUri.uri = Uri.fromFile(file);
                 }
             }
@@ -1333,6 +1381,11 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void releasePlayer(boolean async) {
+        if (released) {
+            return;
+        }
+        released = true;
+        reprepareOnPlayPosition = C.TIME_UNSET;
         activePlayers.remove(playerId);
         if (player != null) {
             player.release();
@@ -1428,7 +1481,52 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         return currentUri;
     }
 
+    public boolean isCurrentStreamHls() {
+        return currentStreamIsHls;
+    }
+
+    public void reprepareOnNextPlay(long lastPosition) {
+        pause();
+        reprepareOnPlayPosition = Math.max(0, lastPosition);
+    }
+
+    public void stopForRecovery() {
+        // Stop reads while keeping playWhenReady, so a pause requested during
+        // asynchronous cache cleanup is respected by the replacement source.
+        if (player != null) {
+            player.stop();
+        }
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
+    }
+
+    private void prepareCurrentSource(long lastPosition, boolean playWhenReady) {
+        long duration = getDuration();
+        setPlayWhenReady(false);
+        if (videoQualities != null) {
+            preparePlayer(videoQualities, videoQualityToSelect);
+        } else if (loopingMediaSource) {
+            preparePlayerLoop(videoUri, videoType, audioUri, audioType);
+        } else {
+            preparePlayer(videoUri, videoType, FileLoader.PRIORITY_HIGH, videoByteOffset);
+        }
+        fallbackPosition = Math.max(0, lastPosition);
+        fallbackDuration = duration;
+        seekTo(fallbackPosition);
+        if (audioPlayer != null) {
+            audioPlayer.seekTo(fallbackPosition);
+        }
+        setPlayWhenReady(playWhenReady);
+    }
+
     public void play() {
+        if (reprepareOnPlayPosition != C.TIME_UNSET) {
+            long lastPosition = reprepareOnPlayPosition;
+            reprepareOnPlayPosition = C.TIME_UNSET;
+            prepareCurrentSource(lastPosition, true);
+            return;
+        }
         mixedPlayWhenReady = true;
         if (mixedAudio) {
             if (!audioPlayerReady || !videoPlayerReady) {
@@ -1480,6 +1578,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void setPlayWhenReady(boolean playWhenReady) {
+        if (playWhenReady && reprepareOnPlayPosition != C.TIME_UNSET) {
+            play();
+            return;
+        }
         mixedPlayWhenReady = playWhenReady;
         if (playWhenReady && mixedAudio) {
             if (!audioPlayerReady || !videoPlayerReady) {
@@ -1554,6 +1656,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void seekTo(long positionMs, boolean fast) {
+        if (reprepareOnPlayPosition != C.TIME_UNSET) {
+            reprepareOnPlayPosition = Math.max(0, positionMs);
+        }
         if (player != null) {
             player.setSeekParameters(fast ? SeekParameters.CLOSEST_SYNC : SeekParameters.EXACT);
             player.seekTo(positionMs);
@@ -1686,64 +1791,95 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     @Override
     public void onPlayerError(PlaybackException error) {
+        final ExoPlayer failedPlayer = player;
         AndroidUtilities.runOnUIThread(() -> {
-            Throwable cause = error.getCause();
-            if (cause instanceof MediaCodecDecoderException) {
-                if (cause.toString().contains("av1") || cause.toString().contains("av01")) {
-                    FileLog.e(error);
-                    FileLog.e("av1 codec failed, we think this codec is not supported");
-                    MessagesController.getGlobalMainSettings().edit().putBoolean("unsupport_video/av01", true).commit();
-                    if (cachedSupportedCodec != null) {
-                        cachedSupportedCodec.clear();
-                    }
-                    videoQualities = Quality.filterByCodec(videoQualities);
-                    if (videoQualities != null) {
-                        preparePlayer(videoQualities, videoQualityToSelect);
-                    }
-                    return;
-                }
+            if (released || player != failedPlayer) {
+                return;
             }
-            if (textureView != null && (!triedReinit && cause instanceof MediaCodecRenderer.DecoderInitializationException || cause instanceof SurfaceNotValidException)) {
-                triedReinit = true;
-                if (player != null) {
+            if (VideoPlaybackRecovery.isDecoderError(error) && retryWithSoftwareDecoder()) {
+                return;
+            }
+            Throwable cause = error.getCause();
+            if (!triedSurfaceReinit && cause instanceof SurfaceNotValidException) {
+                triedSurfaceReinit = true;
+                if (textureView != null && textureView.getParent() instanceof ViewGroup) {
                     ViewGroup parent = (ViewGroup) textureView.getParent();
-                    if (parent != null) {
-                        int i = parent.indexOfChild(textureView);
-                        parent.removeView(textureView);
-                        parent.addView(textureView, i);
-                    }
-                    if (workerQueue != null) {
-                        workerQueue.postRunnable(() -> {
-                            if (player != null) {
-                                player.clearVideoTextureView(textureView);
-                                player.setVideoTextureView(textureView);
-                                if (videoQualities != null) {
-                                    preparePlayer(videoQualities, videoQualityToSelect);
-                                } else if (loopingMediaSource) {
-                                    preparePlayerLoop(videoUri, videoType, audioUri, audioType);
-                                } else {
-                                    preparePlayer(videoUri, videoType);
-                                }
-                                play();
-                            }
-                        });
-                    } else {
-                        player.clearVideoTextureView(textureView);
-                        player.setVideoTextureView(textureView);
-                        if (videoQualities != null) {
-                            preparePlayer(videoQualities, videoQualityToSelect);
-                        } else if (loopingMediaSource) {
-                            preparePlayerLoop(videoUri, videoType, audioUri, audioType);
-                        } else {
-                            preparePlayer(videoUri, videoType);
-                        }
-                        play();
-                    }
+                    int index = parent.indexOfChild(textureView);
+                    parent.removeView(textureView);
+                    parent.addView(textureView, index);
                 }
-            } else {
+                recreatePlayer(failedPlayer);
+                return;
+            }
+            if (delegate != null) {
                 delegate.onError(this, error);
             }
         });
+    }
+
+    public boolean retryWithSoftwareDecoder() {
+        if (released || triedReinit || player == null) {
+            return false;
+        }
+        triedReinit = true;
+        preferSoftwareDecoder = true;
+        recreatePlayer(player);
+        return true;
+    }
+
+    private void recreatePlayer(ExoPlayer failedPlayer) {
+        Runnable recreate = () -> {
+            if (released || player != failedPlayer) {
+                return;
+            }
+            try {
+                final long lastPosition = getCurrentPosition();
+                final long lastDuration = getDuration();
+                final boolean wasPlaying = isPlaying();
+                final float volume = getVolume();
+                final PlaybackParameters parameters = failedPlayer.getPlaybackParameters();
+                final AudioAttributes attributes = failedPlayer.getAudioAttributes();
+                final TrackSelectionParameters selection = trackSelector.getParameters();
+                failedPlayer.removeListener(this);
+                failedPlayer.removeAnalyticsListener(this);
+                failedPlayer.removeVideoListener(this);
+                // release() must finish before a new renderer can acquire a MediaCodec.
+                failedPlayer.release();
+                player = null;
+                if (audioPlayer != null) {
+                    audioPlayer.release();
+                    audioPlayer = null;
+                }
+                trackSelector = new DefaultTrackSelector(ApplicationLoader.applicationContext, new AdaptiveTrackSelection.Factory());
+                trackSelector.setParameters(selection);
+                autoplay = false;
+                reprepareOnPlayPosition = C.TIME_UNSET;
+                prepareCurrentSource(lastPosition, false);
+                fallbackDuration = lastDuration;
+                player.setPlaybackParameters(parameters);
+                player.setAudioAttributes(attributes, handleAudioFocus);
+                setVolume(volume);
+                setPlayWhenReady(wasPlaying);
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (!released && delegate != null) {
+                        delegate.onPlayerRecreated(player);
+                    }
+                });
+            } catch (Exception e) {
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (!released && delegate != null) {
+                        delegate.onError(this, e);
+                    }
+                });
+            }
+        };
+        if (workerQueue != null) {
+            workerQueue.postRunnable(recreate);
+        } else if (Looper.myLooper() == failedPlayer.getApplicationLooper()) {
+            recreate.run();
+        } else {
+            new Handler(failedPlayer.getApplicationLooper()).post(recreate);
+        }
     }
 
     public VideoSize getVideoSize() {

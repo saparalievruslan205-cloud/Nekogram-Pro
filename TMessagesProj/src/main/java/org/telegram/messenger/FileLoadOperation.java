@@ -706,8 +706,8 @@ public class FileLoadOperation {
     }
 
     private long getDownloadedLengthFromOffsetInternal(ArrayList<Range> ranges, final long offset, final long length) {
-        if (ranges == null || state == stateFinished || ranges.isEmpty()) {
-            if (state == stateFinished) {
+        if (ranges == null || state == stateFinished && !preloadFinished || ranges.isEmpty()) {
+            if (state == stateFinished && !preloadFinished) {
                 return length;
             }
             if (downloadedBytes == 0) {
@@ -765,6 +765,8 @@ public class FileLoadOperation {
         });
         try {
             countDownLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         } catch (Exception ignore) {
 
         }
@@ -1011,7 +1013,8 @@ public class FileLoadOperation {
             }
         }
         boolean finalFileExist = cacheFileFinalReady = cacheFileFinal.exists();
-        if (finalFileExist && (parentObject instanceof TLRPC.TL_theme || (totalBytesCount != 0 && !ungzip && totalBytesCount != cacheFileFinal.length())) && !delegate.isLocallyCreatedFile(cacheFileFinal.toString())) {
+        if (finalFileExist && (cacheFileFinal.length() == 0 ||
+                (parentObject instanceof TLRPC.TL_theme || (totalBytesCount != 0 && !ungzip && totalBytesCount != cacheFileFinal.length())) && !delegate.isLocallyCreatedFile(cacheFileFinal.toString()))) {
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.d("debug_loading: delete existing file cause file size mismatch " + cacheFileFinal.getName() + " totalSize=" + totalBytesCount + " existingFileSize=" + cacheFileFinal.length());
             }
@@ -1019,6 +1022,7 @@ public class FileLoadOperation {
                 cacheFileFinal.delete();
             }
             finalFileExist = false;
+            cacheFileFinalReady = false;
         }
 
 
@@ -1347,6 +1351,16 @@ public class FileLoadOperation {
         cancel(false);
     }
 
+    void discardForRecovery(Runnable onStopped) {
+        Utilities.stageQueue.postRunnable(() -> {
+            // Unlike an ordinary pause, corrupted data must not accept in-flight chunks.
+            state = stateCanceled;
+            cancelRequests(null);
+            onFail(false, 1);
+            filesQueue.postRunnable(onStopped);
+        });
+    }
+
     void cancel(boolean deleteFiles) {
         Utilities.stageQueue.postRunnable(() -> {
             cancelOnStage(deleteFiles);
@@ -1548,6 +1562,14 @@ public class FileLoadOperation {
         if (state != stateDownloading && state != stateCancelling) {
             return;
         }
+        // An empty response or cancellation can arrive before all requested parts do.
+        // Keep the temp file and range metadata so the download can be resumed.
+        if (!isPreloadVideoOperation && !preload && cacheFileTemp != null &&
+                !FileDownloadIntegrity.canFinish(totalBytesCount, downloadedBytes, notLoadedBytesRanges)) {
+            onFail(false, 0);
+            return;
+        }
+        preloadFinished = isPreloadVideoOperation || preload;
         state = stateFinished;
         notifyStreamListeners();
         cleanup();
@@ -1680,6 +1702,9 @@ public class FileLoadOperation {
                     }
                 }
                 Utilities.stageQueue.postRunnable(() -> {
+                    if (state != stateFinished) {
+                        return;
+                    }
                     if (BuildVars.LOGS_ENABLED) {
                         FileLog.d("finished downloading file to " + cacheFileFinal + " time = " + (System.currentTimeMillis() - startTime) + " dc = " + datacenterId + " size = " + AndroidUtilities.formatFileSize(totalBytesCount));
                     }
