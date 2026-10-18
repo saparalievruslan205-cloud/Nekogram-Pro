@@ -363,7 +363,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             }
             if (dialog != null) {
                 if (dialogsType == 7 || dialogsType == 8) {
-                    MessagesController.DialogFilter filter = MessagesController.getInstance(currentAccount).selectedDialogFilter[dialogsType == 8 ? 1 : 0];
+                    MessagesController.DialogFilter filter = parentFragment.getDialogFilterForDialogsType(dialogsType);
                     pinned = filter != null && filter.pinnedDialogs.indexOfKey(dialog.id) >= 0;
                 } else {
                     pinned = dialog.pinned;
@@ -1215,7 +1215,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         TLRPC.Dialog fromDialog = dialogs.get(fromIndex);
         TLRPC.Dialog toDialog = dialogs.get(toIndex);
         if (dialogsType == 7 || dialogsType == 8) {
-            MessagesController.DialogFilter filter = MessagesController.getInstance(currentAccount).selectedDialogFilter[dialogsType == 8 ? 1 : 0];
+            MessagesController.DialogFilter filter = parentFragment.getDialogFilterForDialogsType(dialogsType);
             int idx1 = filter.pinnedDialogs.get(fromDialog.id);
             int idx2 = filter.pinnedDialogs.get(toDialog.id);
             filter.pinnedDialogs.put(fromDialog.id, idx2);
@@ -1452,7 +1452,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
     private MessagesController.DialogFilter getCurrentFilter() {
         if (dialogsType == 7 || dialogsType == 8) {
-            return MessagesController.getInstance(currentAccount).selectedDialogFilter[dialogsType - 7];
+            return parentFragment.getDialogFilterForDialogsType(dialogsType);
         }
         return null;
     }

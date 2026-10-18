@@ -84,8 +84,8 @@ public class FilterTabsView extends FrameLayout {
         return positionToStableId.get(currentPosition, -1);
     }
 
-    public int getStableId(int selectedType) {
-        return positionToStableId.get(selectedType, -1);
+    public int getStableId(int tabId) {
+        return positionToStableId.get(idToPosition.get(tabId, -1), -1);
     }
 
     public boolean selectTabWithStableId(int stableId) {
@@ -1242,6 +1242,7 @@ public class FilterTabsView extends FrameLayout {
     public void removeTabs() {
         tabs.clear();
         positionToId.clear();
+        positionToStableId.clear();
         idToPosition.clear();
         positionToWidth.clear();
         positionToCount.clear();
