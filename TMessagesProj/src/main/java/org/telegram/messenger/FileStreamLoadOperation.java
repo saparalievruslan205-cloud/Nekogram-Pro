@@ -135,6 +135,9 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         });
         currentOffset = dataSpec.position;
         requestedLength = dataSpec.length;
+        if (VideoStreamDiagnostics.ENABLED) {
+            VideoStreamDiagnostics.event(this, "open offset=" + currentOffset + " length=" + requestedLength);
+        }
         loadOperation = loadStreamFile();
         bytesTransferred = 0;
         bytesRemaining = document.size - dataSpec.position;
@@ -222,6 +225,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
             return C.RESULT_END_OF_INPUT;
         }
         readLength = (int) Math.min(bytesRemaining, readLength);
+        long waitStarted = 0;
         while (true) {
             // Publish before checking availability: a chunk or close arriving during the
             // check must wake this read, including when loadStreamFile replaces the operation.
@@ -238,6 +242,10 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
                 int availableLength = (int) operation.getDownloadedLengthFromOffset(currentOffset, readLength)[0];
                 checkStreamOpen();
                 if (availableLength == 0) {
+                    if (VideoStreamDiagnostics.ENABLED && waitStarted == 0) {
+                        waitStarted = VideoStreamDiagnostics.now();
+                        VideoStreamDiagnostics.event(this, "waiting offset=" + currentOffset + " length=" + readLength);
+                    }
                     FileLoadOperation nextOperation = loadStreamFile();
                     synchronized (this) {
                         if (cancelled || !opened) {
@@ -263,6 +271,9 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
                         latch.await();
                     }
                     continue;
+                }
+                if (VideoStreamDiagnostics.ENABLED && waitStarted != 0) {
+                    VideoStreamDiagnostics.event(this, "available offset=" + currentOffset + " waitedMs=" + (VideoStreamDiagnostics.now() - waitStarted) + " length=" + availableLength);
                 }
                 synchronized (this) {
                     checkStreamOpen();

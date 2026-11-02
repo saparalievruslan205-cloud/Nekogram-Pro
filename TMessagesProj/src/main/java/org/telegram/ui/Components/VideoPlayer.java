@@ -43,6 +43,7 @@ import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.TransferListener;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import org.telegram.messenger.VideoStreamDiagnostics;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.common.Format;
@@ -164,6 +165,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private SurfaceView surfaceView;
     private Surface surface;
     private boolean isStreaming;
+    private long streamDiagnosticStart;
+    private boolean streamDiagnosticFirstFrameReported;
     private boolean autoplay;
     private boolean mixedAudio;
     public boolean allowMultipleInstances;
@@ -408,6 +411,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(Uri uri, String type, int priority, long videoByteOffset) {
+        streamDiagnosticStart = VideoStreamDiagnostics.now();
+        streamDiagnosticFirstFrameReported = false;
+        VideoStreamDiagnostics.event(this, "prepare");
         this.videoByteOffset = videoByteOffset;
         this.currentDocument = null;
         reprepareOnPlayPosition = C.TIME_UNSET;
@@ -433,6 +439,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(ArrayList<Quality> qualities, Quality select) {
+        streamDiagnosticStart = VideoStreamDiagnostics.now();
+        streamDiagnosticFirstFrameReported = false;
+        VideoStreamDiagnostics.event(this, "prepare qualities");
         currentDocument = null;
         videoByteOffset = 0;
         reprepareOnPlayPosition = C.TIME_UNSET;
@@ -1896,6 +1905,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     @Override
     public void onRenderedFirstFrame() {
+        if (VideoStreamDiagnostics.ENABLED && !streamDiagnosticFirstFrameReported) {
+            streamDiagnosticFirstFrameReported = true;
+            VideoStreamDiagnostics.event(this, "firstFrameMs=" + (VideoStreamDiagnostics.now() - streamDiagnosticStart));
+        }
         delegate.onRenderedFirstFrame();
     }
 
@@ -1921,6 +1934,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         boolean playWhenReady = player.getPlayWhenReady();
         int playbackState = player.getPlaybackState();
         if (lastReportedPlayWhenReady != playWhenReady || lastReportedPlaybackState != playbackState) {
+            if (VideoStreamDiagnostics.ENABLED) {
+                VideoStreamDiagnostics.event(this, "state=" + playbackState + " playWhenReady=" + playWhenReady + " elapsedMs=" + (VideoStreamDiagnostics.now() - streamDiagnosticStart));
+            }
             delegate.onStateChanged(playWhenReady, playbackState);
             lastReportedPlayWhenReady = playWhenReady;
             lastReportedPlaybackState = playbackState;

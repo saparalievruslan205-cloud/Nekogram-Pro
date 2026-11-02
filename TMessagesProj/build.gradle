@@ -177,6 +177,7 @@ android {
             buildConfigField("String","BUILD_VERSION_STRING","\"${TG_APP_VERSION_NAME}\"")
             buildConfigField("boolean", "DEBUG_VERSION", "false")
             buildConfigField("boolean", "DEBUG_PRIVATE_VERSION", "false")
+            buildConfigField("boolean", "VIDEO_STREAM_DIAGNOSTICS", (project.findProperty("videoStreamDiagnostics") == "true").toString())
 
             buildConfigField("int","API_ID", "${localProperties.get("apiId", 0)}")
             buildConfigField("String","API_HASH", "\"${localProperties.get("apiHash")}\"")
@@ -189,6 +190,7 @@ android {
             buildConfigField("String","BUILD_VERSION_STRING","\"${TG_APP_VERSION_NAME}\"")
             buildConfigField("boolean", "DEBUG_VERSION", "false")
             buildConfigField("boolean", "DEBUG_PRIVATE_VERSION", "false")
+            buildConfigField("boolean", "VIDEO_STREAM_DIAGNOSTICS", "false")
 
             buildConfigField("int","API_ID", "${localProperties.get("apiId", 0)}")
             buildConfigField("String","API_HASH", "\"${localProperties.get("apiHash")}\"")

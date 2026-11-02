@@ -867,6 +867,11 @@ public class FileLoader extends BaseController {
         priority = getPriorityValue(priority);
 
         if (operation != null) {
+            // A waiting player can be woken even though no bytes arrived. Giving
+            // the same read a fresh HIGH priority each time schedules a queue
+            // check, whose start notification wakes it again. Keep the existing
+            // priority only for the same active reader at the same byte offset.
+            priority = priorityForRepeatedStreamRead(operation, stream, streamOffset, streamPriority, priority);
             if (cacheType != 10 && operation.isPreloadVideoOperation()) {
                 operation.setIsPreloadVideoOperation(false);
             }
@@ -1206,6 +1211,19 @@ public class FileLoader extends BaseController {
 
     protected FileLoadOperation loadStreamFile(final FileLoadOperationStream stream, final TLRPC.Document document, final ImageLocation location, final Object parentObject, final long offset, final boolean priority, int loadingPriority) {
         return loadStreamFile(stream, document, location, parentObject, offset, priority, loadingPriority, document == null ? 1 : 0);
+    }
+
+    static int priorityForRepeatedStreamRead(FileLoadOperation operation, FileLoadOperationStream stream,
+                                             long offset, boolean streamPriority, int requestedPriority) {
+        if (stream instanceof FileStreamLoadOperation && !streamPriority &&
+                operation.stream == stream && !operation.streamPriority && operation.streamOffset == offset &&
+                operation.isActivelyDownloading() && requestedPriority >= FileLoaderPriorityQueue.PRIORITY_VALUE_MAX &&
+                requestedPriority != Integer.MAX_VALUE &&
+                operation.getPriority() >= FileLoaderPriorityQueue.PRIORITY_VALUE_MAX &&
+                operation.getPriority() != Integer.MAX_VALUE) {
+            return operation.getPriority();
+        }
+        return requestedPriority;
     }
 
     protected FileLoadOperation loadStreamFile(final FileLoadOperationStream stream, final TLRPC.Document document, final ImageLocation location, final Object parentObject, final long offset, final boolean priority, int loadingPriority, int cacheType) {

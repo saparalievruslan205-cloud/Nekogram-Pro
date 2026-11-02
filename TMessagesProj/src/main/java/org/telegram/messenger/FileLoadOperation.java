@@ -47,6 +47,7 @@ public class FileLoadOperation {
     public static volatile DispatchQueue filesQueue = new DispatchQueue("writeFileQueue");
     public static ImmutableByteArrayOutputStream filesQueueByteBuffer;
     private boolean forceSmallChunk;
+    private boolean playbackRequestWindowSelected;
     private Runnable fileWriteRunnable;
     public boolean isStory;
 
@@ -65,6 +66,12 @@ public class FileLoadOperation {
             }
             if (!streamListeners.isEmpty()) {
                 Utilities.stageQueue.cancelRunnable(cancelAfterNoStreamListeners);
+            }
+            // Apply a player's new read position without waiting for the next
+            // asynchronous download-queue check.
+            if (stream instanceof FileStreamLoadOperation && !streamPriority && started && state == stateDownloading && currentDownloadChunkSize > 0) {
+                streamStartOffset = streamOffset / currentDownloadChunkSize * currentDownloadChunkSize;
+                startDownloadRequest(-1);
             }
             if (stream != null && state != stateDownloading && state != stateIdle) {
                 stream.newDataAvailable();
@@ -520,6 +527,10 @@ public class FileLoadOperation {
         return started && !paused;
     }
 
+    boolean isActivelyDownloading() {
+        return started && !paused && state == stateDownloading;
+    }
+
     public int getCurrentType() {
         return currentType;
     }
@@ -603,6 +614,9 @@ public class FileLoadOperation {
         }
         if (save) {
             if (modified) {
+                if (VideoStreamDiagnostics.ENABLED && streamListeners != null && !streamListeners.isEmpty()) {
+                    VideoStreamDiagnostics.event(this, "available offset=" + start + " length=" + (end - start));
+                }
                 ArrayList<FileLoadOperation.Range> rangesFinal = new ArrayList<>(ranges);
                 if (fileWriteRunnable != null) {
                     filesQueue.cancelRunnable(fileWriteRunnable);
@@ -832,9 +846,29 @@ public class FileLoadOperation {
         return start(stream, streamOffset, streamPriority);
     }
 
+    static boolean usePlaybackRequestWindow(FileLoadOperationStream stream, int type, boolean story,
+                                            long size, long bigFileThreshold, int boost) {
+        return stream instanceof FileStreamLoadOperation && type == ConnectionsManager.FileTypeVideo &&
+                !story && size >= bigFileThreshold && boost == NekoConfig.BOOST_EXTREME;
+    }
+
+    static boolean canReusePreload(boolean playbackWindow, long offset, long length, int chunkSize, long totalSize) {
+        return !playbackWindow || length == chunkSize ||
+                length > 0 && length < chunkSize && totalSize > 0 && offset == totalSize - length;
+    }
+
+    private void updatePlaybackCdnParts() {
+        long maxCdnBytes = Math.max(FileLoader.DEFAULT_MAX_FILE_SIZE_PREMIUM, totalBytesCount);
+        long cdnParts = maxCdnBytes / cdnChunkCheckSize + (maxCdnBytes % cdnChunkCheckSize == 0 ? 0 : 1);
+        maxCdnParts = (int) Math.min(Integer.MAX_VALUE, cdnParts);
+    }
+
     public boolean start(final FileLoadOperationStream stream, final long streamOffset, final boolean streamPriority) {
         startTime = System.currentTimeMillis();
         updateParams();
+        if (playbackRequestWindowSelected) {
+            updatePlaybackCdnParts();
+        }
         if (currentDownloadChunkSize == 0) {
             if (forceSmallChunk) {
                 if (BuildVars.LOGS_ENABLED) {
@@ -842,6 +876,16 @@ public class FileLoadOperation {
                 }
                 currentDownloadChunkSize =  1024 * 32;
                 currentMaxDownloadRequests = 4;
+            } else if (downloadChunkSizeBig == 1024 * 1024 && maxDownloadRequestsBig == 12 &&
+                    usePlaybackRequestWindow(stream, currentType, isStory, totalBytesCount,
+                            bigFileSizeFrom, NekoConfig.downloadSpeedBoost)) {
+                // Large parallel requests can delay the first bytes or MP4 metadata.
+                // Use the existing animation streaming window for this operation;
+                // other downloads keep the user's boost setting.
+                currentDownloadChunkSize = downloadChunkSizeAnimation;
+                currentMaxDownloadRequests = maxDownloadRequestsAnimation;
+                playbackRequestWindowSelected = true;
+                updatePlaybackCdnParts();
             } else if (isStory) {
                 currentDownloadChunkSize = downloadChunkSizeBig;
                 currentMaxDownloadRequests = maxDownloadRequestsBig;
@@ -894,7 +938,8 @@ public class FileLoadOperation {
                 }
                 if (alreadyStarted) {
                     if (preloadedBytesRanges != null && getDownloadedLengthFromOffsetInternal(notLoadedBytesRanges, streamStartOffset, 1) == 0) {
-                        if (preloadedBytesRanges.get(streamStartOffset) != null) {
+                        PreloadRange range = preloadedBytesRanges.get(streamStartOffset);
+                        if (range != null && canReusePreload(playbackRequestWindowSelected, streamStartOffset, range.length, currentDownloadChunkSize, totalBytesCount)) {
                             nextPartWasPreloaded = true;
                         }
                     }
@@ -1847,6 +1892,9 @@ public class FileLoadOperation {
         }
         final int requestToken = requestInfo.requestToken;
         requestInfos.remove(requestInfo);
+        if (VideoStreamDiagnostics.ENABLED && streamListeners != null && !streamListeners.isEmpty()) {
+            VideoStreamDiagnostics.event(this, "response offset=" + requestInfo.offset + " success=" + (error == null));
+        }
         AndroidUtilities.runOnUIThread(() -> uiRequestTokens.remove((Integer) requestToken));
         if (error == null) {
             try {
@@ -2435,10 +2483,13 @@ public class FileLoadOperation {
             requestInfo.chunkSize = currentDownloadChunkSize;
             requestInfo.forceSmallChunk = forceSmallChunk;
             requestInfo.connectionType = connectionType;
+            if (VideoStreamDiagnostics.ENABLED && streamListeners != null && !streamListeners.isEmpty()) {
+                VideoStreamDiagnostics.event(this, "request offset=" + downloadOffset + " length=" + currentDownloadChunkSize + " active=" + requestInfos.size());
+            }
 
             if (!isPreloadVideoOperation && supportsPreloading && preloadStream != null && preloadedBytesRanges != null) {
                 PreloadRange range = preloadedBytesRanges.get(requestInfo.offset);
-                if (range != null) {
+                if (range != null && canReusePreload(playbackRequestWindowSelected, requestInfo.offset, range.length, currentDownloadChunkSize, totalBytesCount)) {
                     requestInfo.response = new TLRPC.TL_upload_file();
                     try {
                         if (BuildVars.DEBUG_VERSION && range.length > Integer.MAX_VALUE) {
