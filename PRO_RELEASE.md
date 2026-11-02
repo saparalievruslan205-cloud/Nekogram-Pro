@@ -1,6 +1,6 @@
 # Nekogram Pro releases
 
-The Pro app is the `debug` variant with application ID `tw.nekomimi.nekogram.beta`. Keep that ID and the existing signing certificate to update installed copies without erasing app data. Never commit the keystore, `local.properties`, API credentials, or `google-services.json`.
+The published Pro app is the optimized, non-debuggable `release` variant with application ID `tw.nekomimi.nekogram.beta`. Keep that ID and the existing signing certificate to update installed copies without erasing app data. Never commit the keystore, `local.properties`, API credentials, or `google-services.json`.
 
 `PRO_REVISION` in `gradle.properties` is a fork revision within the upstream `APP_VERSION_CODE`. The Pro APK version code is `APP_VERSION_CODE * 1000 + PRO_REVISION`; it must strictly increase for every published update. The arm64 artifact is named `Nekogram-Pro-<APP_VERSION_NAME>-<versionCode>-arm64-v8a.apk`.
 
