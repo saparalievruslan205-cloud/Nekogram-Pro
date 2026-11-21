@@ -122,45 +122,58 @@ public class TextSettingsCell extends FrameLayout {
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), AndroidUtilities.dp(50) + (needDivider ? 1 : 0));
 
-        int availableWidth = getMeasuredWidth() - getPaddingLeft() - getPaddingRight() - AndroidUtilities.dp(34);
-        int width = betterLayout ? availableWidth : availableWidth / 2;
+        MarginLayoutParams textParams = (MarginLayoutParams) textView.getLayoutParams();
+        MarginLayoutParams valueParams = (MarginLayoutParams) valueTextView.getLayoutParams();
+        int textStartMargin = LocaleController.isRTL ? textParams.rightMargin : textParams.leftMargin;
+        int textEndMargin = LocaleController.isRTL ? textParams.leftMargin : textParams.rightMargin;
+        int valueEndMargin = LocaleController.isRTL ? valueParams.leftMargin : valueParams.rightMargin;
+        boolean hasValueText = valueTextView.getVisibility() == VISIBLE;
+        int gap = AndroidUtilities.dp(12);
+        int availableWidth = Math.max(0, getMeasuredWidth() - getPaddingLeft() - getPaddingRight() - textStartMargin - (hasValueText ? valueEndMargin : textEndMargin));
+        int maxValueWidth = betterLayout ? Math.max(0, availableWidth - gap) : Math.max(0, (availableWidth - gap) / 2);
+
         if (valueImageView.getVisibility() == VISIBLE) {
-            valueImageView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
+            valueImageView.measure(MeasureSpec.makeMeasureSpec(maxValueWidth, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
         }
 
         if (imageView.getVisibility() == VISIBLE) {
             if (imageViewIsColorful) {
                 imageView.measure(MeasureSpec.makeMeasureSpec(AndroidUtilities.dp(28), MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(AndroidUtilities.dp(28), MeasureSpec.EXACTLY));
             } else {
-                imageView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.AT_MOST));
+                imageView.measure(MeasureSpec.makeMeasureSpec(maxValueWidth, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.AT_MOST));
             }
-            if (betterLayout) width -= imageView.getMeasuredWidth() + AndroidUtilities.dp(8);
         }
 
         if (valueBackupImageView != null) {
             valueBackupImageView.measure(MeasureSpec.makeMeasureSpec(valueBackupImageView.getLayoutParams().height, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(valueBackupImageView.getLayoutParams().width, MeasureSpec.EXACTLY));
-            if (betterLayout) width -= valueBackupImageView.getMeasuredWidth() + AndroidUtilities.dp(8);
-        }
-        if (valueTextView.getVisibility() == VISIBLE) {
-            valueTextView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
-            if (betterLayout) {
-                width -= valueTextView.getMeasuredWidth() + AndroidUtilities.dp(8);
-            } else {
-                width = availableWidth - valueTextView.getMeasuredWidth() - AndroidUtilities.dp(8);
+            if (valueBackupImageView.getVisibility() == VISIBLE) {
+                availableWidth = Math.max(0, availableWidth - valueBackupImageView.getMeasuredWidth() - AndroidUtilities.dp(8));
+                maxValueWidth = betterLayout ? Math.max(0, availableWidth - gap) : Math.max(0, (availableWidth - gap) / 2);
             }
+        }
+
+        int titleWidth;
+        if (hasValueText) {
+            valueTextView.measure(MeasureSpec.makeMeasureSpec(maxValueWidth, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
+            int measuredValueWidth = Math.min(maxValueWidth, valueTextView.getMeasuredWidth());
+            titleWidth = Math.max(0, availableWidth - measuredValueWidth - gap);
 
             if (valueImageView.getVisibility() == VISIBLE) {
                 MarginLayoutParams params = (MarginLayoutParams) valueImageView.getLayoutParams();
                 if (LocaleController.isRTL) {
-                    params.leftMargin = AndroidUtilities.dp(padding + 4) + valueTextView.getMeasuredWidth();
+                    params.leftMargin = AndroidUtilities.dp(padding + 4) + measuredValueWidth;
                 } else {
-                    params.rightMargin = AndroidUtilities.dp(padding + 4) + valueTextView.getMeasuredWidth();
+                    params.rightMargin = AndroidUtilities.dp(padding + 4) + measuredValueWidth;
                 }
+                titleWidth = Math.max(0, titleWidth - valueImageView.getMeasuredWidth() - AndroidUtilities.dp(4));
             }
         } else {
-            width = availableWidth;
+            titleWidth = availableWidth;
+            if (valueImageView.getVisibility() == VISIBLE) {
+                titleWidth = Math.max(0, titleWidth - valueImageView.getMeasuredWidth() - AndroidUtilities.dp(8));
+            }
         }
-        textView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
+        textView.measure(MeasureSpec.makeMeasureSpec(titleWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
     }
 
     @Override

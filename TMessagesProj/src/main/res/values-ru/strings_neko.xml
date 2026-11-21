@@ -330,10 +330,10 @@
     <string name="JsonCopyValue">Копировать значение</string>
     <string name="LocalCustomEmoji">Локальные пользовательские эмодзи</string>
     <string name="MiniSenderAvatar">Телефотография отправителя</string>
-    <string name="ExternalStreamingProtocol">Внешний протокол потоковой передачи</string>
-    <string name="ExternalStreamingProtocolDescription">Выберите способ потоковой передачи незавершенных видеороликов на внешние плееры. Наивысший режим работает с большинством современных плееров; если видео зависит или не воспроизводится, переключитесь на HTTP.</string>
-    <string name="ExternalStreamingProtocolContentProvider">Внешний поставщик контента по протоколу потоковой передачи</string>
-    <string name="ExternalStreamingProtocolHttp">Внешний протокол потоковой передачи HTTP</string>
+    <string name="ExternalStreamingProtocol">Протокол внешнего стриминга</string>
+    <string name="ExternalStreamingProtocolDescription">Выберите способ потоковой передачи незавершённых видео на внешние плееры. Нативный режим лучше всего работает с большинством современных плееров; если видео зависает или не воспроизводится, переключитесь на HTTP.</string>
+    <string name="ExternalStreamingProtocolContentProvider">Нативный</string>
+    <string name="ExternalStreamingProtocolHttp">HTTP</string>
     <!-- Accessibility -->
     <string name="AccessibilitySettings">Настройки доступности</string>
 </resources>

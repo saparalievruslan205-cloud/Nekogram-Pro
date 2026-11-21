@@ -58,6 +58,7 @@ public class AnimatedTextView extends View {
         private boolean isRTL = false;
 
         private float currentWidth, currentHeight;
+        private int currentLayoutWidth;
         private Part[] currentParts;
         private CharSequence currentText;
 
@@ -389,6 +390,7 @@ public class AnimatedTextView extends View {
 
                 oldText = currentText;
                 currentText = text;
+                currentLayoutWidth = width;
 
                 ArrayList<Part> currentParts = new ArrayList<>();
                 ArrayList<Part> oldParts = new ArrayList<>();
@@ -465,6 +467,15 @@ public class AnimatedTextView extends View {
                         oldText = null;
                         oldWidth = 0;
                         t = 0;
+                        int finalWidth = overrideFullWidth > 0 ? overrideFullWidth : bounds.width();
+                        if (finalWidth > 0 && currentWidth > finalWidth && currentText != null) {
+                            clearCurrentParts();
+                            AnimatedTextDrawable.this.currentParts = new Part[1];
+                            currentLayoutWidth = finalWidth;
+                            AnimatedTextDrawable.this.currentParts[0] = new Part(makeLayout(currentText, finalWidth), 0, -1);
+                            currentWidth = AnimatedTextDrawable.this.currentParts[0].width;
+                            currentHeight = AnimatedTextDrawable.this.currentParts[0].layout.getHeight();
+                        }
                         invalidateSelf();
                         if (widthUpdatedListener != null) {
                             widthUpdatedListener.run();
@@ -493,9 +504,10 @@ public class AnimatedTextView extends View {
                 toSetTextMoveDown = false;
                 t = 0;
 
-                if (!text.equals(currentText)) {
+                if (!text.equals(currentText) || (width > 0 && currentLayoutWidth != width)) {
                     clearCurrentParts();
                     currentParts = new Part[1];
+                    currentLayoutWidth = width;
                     currentParts[0] = new Part(makeLayout(currentText = text, width), 0, -1);
                     currentWidth = currentParts[0].width;
                     currentHeight = currentParts[0].layout.getHeight();
@@ -1172,7 +1184,8 @@ public class AnimatedTextView extends View {
         }
         lastMaxWidth = width;
         if (adaptWidth && MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.AT_MOST) {
-            width = getPaddingLeft() + (int) Math.ceil(drawable.getWidth()) + getPaddingRight();
+            int measuredWidth = getPaddingLeft() + (int) Math.ceil(drawable.getWidth()) + getPaddingRight();
+            width = width > 0 ? Math.min(width, measuredWidth) : measuredWidth;
         }
         setMeasuredDimension(width, height);
     }
