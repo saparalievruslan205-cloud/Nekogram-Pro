@@ -170,6 +170,7 @@ public class TranslateController extends BaseController {
             (!messageObject.isOutOwner() || manually) &&
             !messageObject.isRestrictedMessage &&
             !messageObject.isSponsored() &&
+            !(MessageObject.getMedia(messageObject) instanceof TLRPC.TL_messageMediaWidget) &&
             (
                 messageObject.type == MessageObject.TYPE_TEXT ||
                 messageObject.type == MessageObject.TYPE_VIDEO ||
@@ -1946,11 +1947,11 @@ public class TranslateController extends BaseController {
 
         LanguageDetector.detectLanguage(storyItem.caption, lng -> AndroidUtilities.runOnUIThread(() -> {
             storyItem.detectedLng = lng;
-            getMessagesController().getStoriesController().getStoriesStorage().putStoryInternal(storyItem.dialogId, storyItem);
+            getMessagesStorage().getStorageQueue().postRunnable(() -> getMessagesController().getStoriesController().getStoriesStorage().putStoryInternal(storyItem.dialogId, storyItem));
             detectingStories.remove(key);
         }), err -> AndroidUtilities.runOnUIThread(() -> {
             storyItem.detectedLng = UNKNOWN_LANGUAGE;
-            getMessagesController().getStoriesController().getStoriesStorage().putStoryInternal(storyItem.dialogId, storyItem);
+            getMessagesStorage().getStorageQueue().postRunnable(() -> getMessagesController().getStoriesController().getStoriesStorage().putStoryInternal(storyItem.dialogId, storyItem));
             detectingStories.remove(key);
         }));
     }

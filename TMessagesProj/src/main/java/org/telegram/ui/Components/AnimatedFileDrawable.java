@@ -149,8 +149,11 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
 
     @UiThread
     private void uiRunnableNoFrameImpl() {
-        chekDestroyDecoder();
         loadFrameTask = null;
+        chekDestroyDecoder();
+        if (isRecycled) {
+            return;
+        }
         if (pendingSeekToUI >= 0 && pendingSeekTo == -1) {
             pendingSeekToUI = -1;
             invalidateAfter = 0;
@@ -191,10 +194,62 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
 
     @UiThread
     private void chekDestroyDecoder() {
+        if (destroyWhenDone && loadFrameTask == null && !generatingCache) {
+            destroyWhenDone = false;
+            if (mDecoder != null) {
+                mDecoder.recycle();
+                mDecoder = null;
+            }
+            if (bitmapsCache != null) {
+                bitmapsCache.recycle();
+            }
+            if (renderingBuffer != null) {
+                renderingBuffer.recycle();
+                renderingBuffer = null;
+            }
+            if (nextRenderingBuffer != null) {
+                nextRenderingBuffer.recycle();
+                nextRenderingBuffer = null;
+            }
+            if (nextRenderingBuffer2 != null) {
+                nextRenderingBuffer2.recycle();
+                nextRenderingBuffer2 = null;
+            }
+            if (backgroundBuffer != null) {
+                backgroundBuffer.recycle();
+                backgroundBuffer = null;
+            }
+            if (generatingCacheBitmap != null) {
+                generatingCacheBitmap.recycle();
+                generatingCacheBitmap = null;
+            }
+            if (decodeQueue != null) {
+                decodeQueue.recycle();
+                decodeQueue = null;
+            }
+            for (int i = 0; i < unusedBuffers.size(); i++) {
+                AnimatedFileBuffer buffer = unusedBuffers.get(i);
+                if (buffer != null) {
+                    buffer.recycle();
+                }
+            }
+            unusedBuffers.clear();
+            getPaint().setShader(null);
+            invalidateInternal();
+            return;
+        }
         if (!canLoadFrames()) {
             if (renderingBuffer != null) {
                 renderingBuffer.recycle();
                 renderingBuffer = null;
+            }
+            if (nextRenderingBuffer != null) {
+                nextRenderingBuffer.recycle();
+                nextRenderingBuffer = null;
+            }
+            if (nextRenderingBuffer2 != null) {
+                nextRenderingBuffer2.recycle();
+                nextRenderingBuffer2 = null;
             }
             if (backgroundBuffer != null) {
                 backgroundBuffer.recycle();
@@ -223,7 +278,11 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
 
     @UiThread
     private void uiRunnableImpl() {
+        loadFrameTask = null;
         chekDestroyDecoder();
+        if (isRecycled) {
+            return;
+        }
         if (stream != null && pendingRemoveLoading) {
             FileLoader.getInstance(currentAccount).removeLoadingVideo(stream.getDocument(), false, false);
         }
@@ -237,7 +296,6 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
         } else {
             forceDecodeAfterNextFrame = false;
         }
-        loadFrameTask = null;
 
         if (pendingSeekToUI >= 0) {
             nextRenderingBuffer = backgroundBuffer;
@@ -684,10 +742,13 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
             RLottieDrawable.lottieCacheGenerateQueue.cancelRunnable(cacheGenRunnable);
             cacheGenRunnable = null;
         }
-        if (loadFrameTask == null) {
+        if (loadFrameTask == null && !generatingCache) {
             if (mDecoder != null) {
                 mDecoder.recycle();
                 mDecoder = null;
+            }
+            if (bitmapsCache != null) {
+                bitmapsCache.recycle();
             }
 
             ArrayList<Bitmap> bitmapToRecycle = new ArrayList<>();
@@ -702,6 +763,10 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
             }
             if (backgroundBuffer != null) {
                 bitmapToRecycle.add(backgroundBuffer.bitmap);
+            }
+            if (generatingCacheBitmap != null) {
+                bitmapToRecycle.add(generatingCacheBitmap);
+                generatingCacheBitmap = null;
             }
             for (AnimatedFileBuffer buffer : unusedBuffers) {
                 if (buffer != null) {
@@ -729,7 +794,8 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
             stream.cancel(true);
             stream = null;
         }
-        invalidateInternal();
+        // recycle() is also called from ImageLoader / finalizer threads, parents may only be invalidated on the UI thread
+        AndroidUtilities.executeOnUIThread(this::invalidateInternal);
     }
 
     public void resetStream(boolean stop) {
@@ -1230,6 +1296,10 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
         if (cacheGenerateDecoder != null) {
             cacheGenerateDecoder.recycle();
             cacheGenerateDecoder = null;
+        }
+        if (generatingCacheBitmap != null) {
+            generatingCacheBitmap.recycle();
+            generatingCacheBitmap = null;
         }
     }
 

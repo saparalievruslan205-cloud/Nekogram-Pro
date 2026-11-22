@@ -318,6 +318,27 @@ public abstract class RightSlidingDialogContainer extends FrameLayout {
         openAnimator.start();
     }
 
+    public void destroy() {
+        isOpenned = false;
+        if (openAnimator != null) {
+            ValueAnimator animator = openAnimator;
+            openAnimator = null;
+            animator.cancel();
+        }
+        notificationsLocker.unlock();
+        if (currentFragment != null) {
+            BaseFragment fragment = currentFragment;
+            currentFragment = null;
+            fragment.onPause();
+            fragment.onFragmentDestroy();
+            removeAllViews();
+        }
+        currentFragmentView = null;
+        currentFragmentFullscreenView = null;
+        currentActionBarView = null;
+        navigationLayout = null;
+    }
+
     public interface BaseFragmentWithFullscreen {
         View getFullscreenView();
     }

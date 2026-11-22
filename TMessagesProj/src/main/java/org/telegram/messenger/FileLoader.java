@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -121,7 +122,7 @@ public class FileLoader extends BaseController {
         }
     }
 
-    public DispatchQueue getFileLoaderQueue() {
+    public DispatchQueue2 getFileLoaderQueue() {
         return fileLoaderQueue;
     }
 
@@ -205,7 +206,7 @@ public class FileLoader extends BaseController {
 
     public final static int PRELOAD_CACHE_TYPE = 11;
 
-    private volatile static DispatchQueue fileLoaderQueue = new DispatchQueue("fileUploadQueue");
+    private volatile static DispatchQueue2 fileLoaderQueue = new DispatchQueue2("fileUploadQueue");
     private final FilePathDatabase filePathDatabase;
 
     private final LinkedList<FileUploadOperation> uploadOperationQueue = new LinkedList<>();
@@ -227,7 +228,8 @@ public class FileLoader extends BaseController {
     private static SparseArray<File> mediaDirs = null;
     private FileLoaderDelegate delegate = null;
 
-    private int lastReferenceId;
+    private static final int MAX_PARENT_OBJECT_REFERENCES = 512;
+    private final AtomicInteger lastReferenceId = new AtomicInteger(1);
     private final ConcurrentHashMap<Integer, Object> parentObjectReferences = new ConcurrentHashMap<>();
 
     private static final FileLoader[] Instance = new FileLoader[UserConfig.MAX_ACCOUNT_COUNT];
@@ -281,12 +283,24 @@ public class FileLoader extends BaseController {
     }
 
     public int getFileReference(Object parentObject) {
-        int reference = lastReferenceId++;
+        if (parentObject == null) {
+            return 0;
+        }
+        int reference = lastReferenceId.getAndIncrement();
+        if (reference == 0) {
+            reference = lastReferenceId.getAndIncrement();
+        }
         parentObjectReferences.put(reference, parentObject);
+        if (parentObjectReferences.size() > MAX_PARENT_OBJECT_REFERENCES) {
+            parentObjectReferences.remove(reference - MAX_PARENT_OBJECT_REFERENCES);
+        }
         return reference;
     }
 
     public Object getParentObject(int reference) {
+        if (reference == 0) {
+            return null;
+        }
         return parentObjectReferences.get(reference);
     }
 
@@ -359,7 +373,11 @@ public class FileLoader extends BaseController {
             }
             uploadSizes.remove(location);
             if (operation != null) {
-                uploadOperationPathsEnc.remove(location);
+                if (!enc) {
+                    uploadOperationPaths.remove(location);
+                } else {
+                    uploadOperationPathsEnc.remove(location);
+                }
                 uploadOperationQueue.remove(operation);
                 uploadSmallOperationQueue.remove(operation);
                 operation.cancel();
@@ -1209,6 +1227,14 @@ public class FileLoader extends BaseController {
         fileLoaderQueue.postRunnable(runnable);
     }
 
+    // Holds the stream open for a player that is about to be created, so the first requests
+    // go out while the viewer is built; the player's own stream joins the same operation.
+    private static final FileLoadOperationStream pendingPlayerStream = () -> {};
+
+    public void startVideoStream(TLRPC.Document document, Object parentObject) {
+        fileLoaderQueue.postRunnable(() -> loadFileInternal(document, null, null, null, null, parentObject, null, 0, FileStreamLoadOperation.getStreamPrioriy(document), pendingPlayerStream, 0, false, 0));
+    }
+
     protected FileLoadOperation loadStreamFile(final FileLoadOperationStream stream, final TLRPC.Document document, final ImageLocation location, final Object parentObject, final long offset, final boolean priority, int loadingPriority) {
         return loadStreamFile(stream, document, location, parentObject, offset, priority, loadingPriority, document == null ? 1 : 0);
     }
@@ -1537,7 +1563,7 @@ public class FileLoader extends BaseController {
             return new File("");
         }
         if (documentId != 0) {
-            String path = getInstance(UserConfig.selectedAccount).getFileDatabase().getPath(documentId, dcId, type, useFileDatabaseQueue);
+            String path = getFileDatabase().getPath(documentId, dcId, type, useFileDatabaseQueue);
             if (path != null) {
                 return new File(path);
             }

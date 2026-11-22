@@ -12,6 +12,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Application;
 import android.content.BroadcastReceiver;
+import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -242,6 +243,8 @@ public class ApplicationLoader extends Application {
             e.printStackTrace();
         }
 
+        LiteMode.registerBatteryReceiver();
+
         try {
             PowerManager pm = (PowerManager) ApplicationLoader.applicationContext.getSystemService(Context.POWER_SERVICE);
             isScreenOn = pm.isScreenOn();
@@ -283,6 +286,12 @@ public class ApplicationLoader extends Application {
             DownloadController.getInstance(a);
         }
         BillingController.getInstance().startConnection();
+        if (!org.telegram.utils.twidget.WidgetSandboxSession.disabledByConfig()) {
+            // HTML widgets: the isolated engine's process up front, after the app's own start, so that a widget's first
+            // frame does not wait for it.
+            AndroidUtilities.runOnUIThread(() -> Utilities.globalQueue.postRunnable(
+                    () -> org.telegram.utils.twidget.WidgetSandboxSession.prewarmEngine(applicationContext)), 3000);
+        }
     }
 
     public ApplicationLoader() {
@@ -299,6 +308,11 @@ public class ApplicationLoader extends Application {
         }
 
         super.onCreate();
+
+        // The widget engine's isolated process has no files, network or accounts: none of the client starts there.
+        if (org.telegram.utils.twidget.WidgetEngineService.isEngineProcess()) {
+            return;
+        }
 
         // AndroidUtilities must be initialized before FileLog
         final String helloWorld = AndroidUtilities.getHelloWorld();
@@ -732,6 +746,30 @@ public class ApplicationLoader extends Application {
     public BetaUpdate getUpdate() {
         return null;
     }
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (org.telegram.utils.twidget.WidgetEngineService.isEngineProcess()) {
+            return;
+        }
+        try {
+            ImageLoader.trimMemoryIfCreated(level);
+        } catch (Throwable ignore) {
+        }
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        if (org.telegram.utils.twidget.WidgetEngineService.isEngineProcess()) {
+            return;
+        }
+        try {
+            ImageLoader.trimMemoryIfCreated(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+        } catch (Throwable ignore) {
+        }
+    }
+
     public File getDownloadedUpdateFile() {
         return null;
     }

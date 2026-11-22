@@ -13,6 +13,7 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.RealObject;
 import org.robolectric.util.ReflectionHelpers;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.MessagesController;
@@ -22,6 +23,7 @@ import org.telegram.ui.ActionBar.INavigationLayout;
 import org.telegram.ui.Components.FilterTabsView;
 import org.telegram.ui.Components.FilterTabsViewStateTest;
 import org.telegram.ui.Components.MediaPreviewLifecycleTest;
+import org.telegram.utils.glass.GlassEngine;
 
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -148,7 +150,10 @@ public class DialogsActivityFolderTest {
 
     @Implements(value = BaseFragment.class, isInAndroidSdk = false)
     public static class ShadowBaseFragment {
-        @Implementation protected void __constructor__(Bundle args) { }
+        @RealObject BaseFragment realFragment;
+        @Implementation protected void __constructor__(Bundle args) {
+            ReflectionHelpers.setField(realFragment, "glassEngine", new GlassEngine());
+        }
     }
 
     @Implements(value = MessagesController.class, isInAndroidSdk = false)

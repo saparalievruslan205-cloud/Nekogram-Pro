@@ -156,23 +156,39 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         if (loadOperation != null) {
             currentFile = loadOperation.getCurrentFile();
             if (currentFile != null) {
+                RandomAccessFile openedFile = null;
                 try {
-                    RandomAccessFile openedFile = new RandomAccessFile(currentFile, "r");
+                    openedFile = new RandomAccessFile(currentFile, "r");
                     openedFile.seek(currentOffset);
                     synchronized (this) {
                         if (cancelled || !opened) {
                             openedFile.close();
+                            openedFile = null;
                             throw new InterruptedIOException("Stream load cancelled");
                         }
                         file = openedFile;
+                        openedFile = null;
                     }
                     if (loadOperation.isFinished() && !loadOperation.isPreloadFinished()) {
                         isNetwork = false;
                         checkFinishedFile(currentFile);
                     }
                 } catch (IOException e) {
+                    if (openedFile != null) {
+                        try {
+                            openedFile.close();
+                        } catch (Exception ignore) {
+                        }
+                    }
+                    close();
                     throw e;
                 } catch (Throwable e) {
+                    if (openedFile != null) {
+                        try {
+                            openedFile.close();
+                        } catch (Exception ignore) {
+                        }
+                    }
                 }
             }
         }

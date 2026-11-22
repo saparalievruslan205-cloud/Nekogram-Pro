@@ -1514,7 +1514,7 @@ public class SecretMediaViewer implements NotificationCenter.NotificationCenterD
                 if (f.exists()) {
                     preparePlayer(f);
                 } else {
-                    File file = FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner);
+                    File file = messageObject.isLivePhoto() ? FileLoader.getInstance(currentAccount).getPathToAttach(document, null, true) : FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner);
                     File encryptedFile = new File(file.getAbsolutePath() + ".enc");
                     if (encryptedFile.exists()) {
                         file = encryptedFile;
@@ -1527,7 +1527,7 @@ public class SecretMediaViewer implements NotificationCenter.NotificationCenterD
             }
         } else {
             actionBar.setTitle(LocaleController.getString(R.string.DisappearingPhoto));
-            TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(messageObject.photoThumbs, AndroidUtilities.getPhotoSize());
+            TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(messageObject.photoThumbs, AndroidUtilities.getPhotoSize(true));
             centerImage.setImage(ImageLocation.getForObject(sizeFull, messageObject.photoThumbsObject), null, currentThumb != null ? new BitmapDrawable(currentThumb.bitmap) : null, -1, null, messageObject, 2);
 
             if (sizeFull != null) {

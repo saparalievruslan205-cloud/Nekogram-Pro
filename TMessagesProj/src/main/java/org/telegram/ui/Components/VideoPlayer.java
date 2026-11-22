@@ -58,7 +58,6 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.exoplayer.audio.TeeAudioProcessor;
-import androidx.media3.exoplayer.dash.DashMediaSource;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer;
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
@@ -156,7 +155,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         boolean needUpdate();
     }
 
-    public ExoPlayer player;
+    public volatile ExoPlayer player;
     private ExoPlayer audioPlayer;
     private DefaultBandwidthMeter bandwidthMeter;
     private MappingTrackSelector trackSelector;
@@ -174,7 +173,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private boolean triedReinit;
     private boolean preferSoftwareDecoder;
     private boolean triedSurfaceReinit;
-    private boolean released;
+    private volatile boolean released;
     private long reprepareOnPlayPosition = C.TIME_UNSET;
     private long videoByteOffset;
     private TLRPC.Document currentDocument;
@@ -200,7 +199,6 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private int repeatCount;
 
     private boolean shouldPauseOther;
-    MediaSource.Factory dashMediaSourceFactory;
     HlsMediaSource.Factory hlsMediaSourceFactory;
     ProgressiveMediaSource.Factory progressiveMediaSourceFactory;
 
@@ -278,6 +276,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             if (workerQueue != null) {
                 player.setWorkerQueue(workerQueue::postRunnable);
             }
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(), false);
 
             player.addAnalyticsListener(this);
             player.addListener(this);
@@ -297,6 +299,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 audioPlayer = new ExoPlayer.Builder(ApplicationLoader.applicationContext)
                         .setTrackSelector(trackSelector)
                         .setLoadControl(loadControl).build();
+                audioPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(), false);
                 audioPlayer.addListener(new Player.Listener() {
 
                     @Override
@@ -388,11 +394,6 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             ).createMediaSource(mediaItem);
         }
         switch (type) {
-            case "dash":
-                if (dashMediaSourceFactory == null) {
-                    dashMediaSourceFactory = new DashMediaSource.Factory(mediaDataSourceFactory);
-                }
-                return dashMediaSourceFactory.createMediaSource(mediaItem);
             case "hls":
                 if (hlsMediaSourceFactory == null) {
                     hlsMediaSourceFactory = new HlsMediaSource.Factory(mediaDataSourceFactory);
@@ -1394,6 +1395,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             return;
         }
         released = true;
+        audioUpdateHandler.removeCallbacksAndMessages(null);
         reprepareOnPlayPosition = C.TIME_UNSET;
         activePlayers.remove(playerId);
         if (player != null) {
@@ -1745,11 +1747,13 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         if (player != null) {
             player.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(type == AudioManager.STREAM_VOICE_CALL ? C.USAGE_VOICE_COMMUNICATION : C.USAGE_MEDIA)
+                .setContentType(type == AudioManager.STREAM_VOICE_CALL ? C.AUDIO_CONTENT_TYPE_SPEECH : C.AUDIO_CONTENT_TYPE_MOVIE)
                 .build(), handleAudioFocus);
         }
         if (audioPlayer != null) {
             audioPlayer.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(type == AudioManager.STREAM_VOICE_CALL ? C.USAGE_VOICE_COMMUNICATION : C.USAGE_MEDIA)
+                .setContentType(type == AudioManager.STREAM_VOICE_CALL ? C.AUDIO_CONTENT_TYPE_SPEECH : C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(), true);
         }
     }
@@ -1859,11 +1863,21 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                     audioPlayer.release();
                     audioPlayer = null;
                 }
+                if (released) {
+                    return;
+                }
                 trackSelector = new DefaultTrackSelector(ApplicationLoader.applicationContext, new AdaptiveTrackSelection.Factory());
                 trackSelector.setParameters(selection);
                 autoplay = false;
                 reprepareOnPlayPosition = C.TIME_UNSET;
                 prepareCurrentSource(lastPosition, false);
+                if (released) {
+                    if (player != null) {
+                        player.release();
+                        player = null;
+                    }
+                    return;
+                }
                 fallbackDuration = lastDuration;
                 player.setPlaybackParameters(parameters);
                 player.setAudioAttributes(attributes, handleAudioFocus);
@@ -1998,6 +2012,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             }
             if (buffer == AudioProcessor.EMPTY_BUFFER || !mixedPlayWhenReady) {
                 audioUpdateHandler.postDelayed(() -> {
+                    if (released || audioVisualizerDelegate == null) {
+                        return;
+                    }
                     audioUpdateHandler.removeCallbacksAndMessages(null);
                     audioVisualizerDelegate.onVisualizerUpdate(false, true, null);
                 }, 80);
@@ -2076,7 +2093,12 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 }
                 lastUpdateTime = System.currentTimeMillis();
 
-                audioUpdateHandler.postDelayed(() -> audioVisualizerDelegate.onVisualizerUpdate(true, true, partsAmplitude), 130);
+                audioUpdateHandler.postDelayed(() -> {
+                    if (released || audioVisualizerDelegate == null) {
+                        return;
+                    }
+                    audioVisualizerDelegate.onVisualizerUpdate(true, true, partsAmplitude);
+                }, 130);
             }
         }
     }

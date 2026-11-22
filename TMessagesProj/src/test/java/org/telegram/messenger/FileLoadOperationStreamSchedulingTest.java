@@ -25,7 +25,7 @@ import static org.junit.Assert.assertTrue;
 @Config(sdk = 29, manifest = Config.NONE, application = Application.class,
         shadows = FileLoadOperationStreamSchedulingTest.ShadowLoadOperation.class)
 public class FileLoadOperationStreamSchedulingTest {
-    private DispatchQueue previousQueue;
+    private DispatchQueue2 previousQueue;
 
     @Before
     public void setUp() {
@@ -124,7 +124,7 @@ public class FileLoadOperationStreamSchedulingTest {
         assertTrue(FileLoadOperation.canReusePreload(false, 0, 1024 * 1024, 128 * 1024, 1024 * 1024));
     }
 
-    private static class ImmediateQueue extends DispatchQueue {
+    private static class ImmediateQueue extends DispatchQueue2 {
         ImmediateQueue() { super("stream-test", false); }
         @Override public boolean postRunnable(Runnable runnable) { runnable.run(); return true; }
         @Override public void cancelRunnable(Runnable runnable) { }

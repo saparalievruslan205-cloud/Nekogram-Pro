@@ -68,9 +68,18 @@ public class ChatActivityContainer extends FrameLayout {
         initChatActivity();
     }
 
+    private boolean created;
+    private boolean destroyed;
+
     protected void initChatActivity() {
-        if (!chatActivity.onFragmentCreate()) {
+        if (destroyed) {
             return;
+        }
+        if (!created) {
+            if (!chatActivity.onFragmentCreate()) {
+                return;
+            }
+            created = true;
         }
 
         fragmentView = chatActivity.fragmentView;
@@ -91,6 +100,20 @@ public class ChatActivityContainer extends FrameLayout {
         addView(fragmentView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
         if (isActive) {
             chatActivity.onResume();
+        }
+    }
+
+    public void onDestroy() {
+        if (destroyed) {
+            return;
+        }
+        destroyed = true;
+        if (created) {
+            created = false;
+            if (isActive && fragmentView != null) {
+                chatActivity.onPause();
+            }
+            chatActivity.onFragmentDestroy();
         }
     }
 

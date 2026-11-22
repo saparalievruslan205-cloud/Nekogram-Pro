@@ -106,9 +106,10 @@ jint getTimeDifference(JNIEnv *env, jclass c, jint instanceNum) {
     return ConnectionsManager::getInstance(instanceNum).getTimeDifference();
 }
 
-void sendRequest(JNIEnv *env, jclass c, jint instanceNum, jlong object, jint flags, jint datacenterId, jint connectionType, jboolean immediate, jint token) {
+void sendRequest(JNIEnv *env, jclass c, jint instanceNum, jlong object, jint flags, jint datacenterId, jint connectionType, jboolean immediate, jint token, jint downloadSize) {
     TL_api_request *request = new TL_api_request();
     request->request = (NativeByteBuffer *) (intptr_t) object;
+    request->downloadSize = downloadSize > 0 ? (uint32_t) downloadSize : 0;
     ConnectionsManager::getInstance(instanceNum).sendRequest(request, ([instanceNum, token](TLObject *response, TL_error *error, int32_t networkType, int64_t responseTime, int64_t msgId, int32_t dcId) {
         TL_api_response *resp = (TL_api_response *) response;
         jlong ptr = 0;
@@ -163,22 +164,18 @@ void receivedIntegrityCheckClassic(JNIEnv *env, jclass c, jint instanceNum, jint
     }
 }
 
-void receivedCaptchaResult(JNIEnv *env, jclass c, jint instanceNum, jintArray requestTokens, jstring token) {
-    const char* tokenStr = env->GetStringUTFChars(token, 0);
-    jsize requestTokensLength = env->GetArrayLength(requestTokens);
-    jint *requestTokensJArr = env->GetIntArrayElements(requestTokens, NULL);
-    int* requestTokensArr = new int[requestTokensLength];
-    for (int i = 0; i < requestTokensLength; ++i) {
-        requestTokensArr[i] = requestTokensJArr[i];
+void receivedCaptchaResult(JNIEnv *env, jclass c, jint instanceNum, jint requestToken, jint generation, jstring token) {
+    // Always resume the request: a missing token is sent as a failure marker,
+    // otherwise the request would stay in awaitingCaptchaCheck forever.
+    std::string tokenString = "RECAPTCHA_FAILED_TOKEN_NULL";
+    if (token != nullptr) {
+        const char *tokenStr = env->GetStringUTFChars(token, nullptr);
+        if (tokenStr != nullptr) {
+            tokenString = tokenStr;
+            env->ReleaseStringUTFChars(token, tokenStr);
+        }
     }
-    if (requestTokensJArr != nullptr) {
-        env->ReleaseIntArrayElements(requestTokens, requestTokensJArr, 0);
-    }
-    std::string tokenString = tokenStr;
-    ConnectionsManager::getInstance(instanceNum).receivedCaptchaResult(requestTokensLength, requestTokensArr, tokenString);
-    if (tokenStr != nullptr) {
-        env->ReleaseStringUTFChars(token, tokenStr);
-    }
+    ConnectionsManager::getInstance(instanceNum).receivedCaptchaResult(requestToken, generation, tokenString);
 }
 
 jboolean isGoodPrime(JNIEnv *env, jclass c, jbyteArray prime, jint g) {
@@ -342,8 +339,11 @@ void importAuthKey(JNIEnv *env, jclass c, jint instanceNum, jint dcId, jbyteArra
     }
 
     jbyte *bytes = env->GetByteArrayElements(authKeyArray, nullptr);
+    if (bytes == nullptr) {
+        return;
+    }
     ConnectionsManager::getInstance(instanceNum).importAuthKey((uint32_t) dcId, (const uint8_t *) bytes);
-    env->ReleaseByteArrayElements(authKeyArray, bytes, 0);
+    env->ReleaseByteArrayElements(authKeyArray, bytes, JNI_ABORT);
 }
 
 jbyteArray exportAuthKey(JNIEnv *env, jclass c, jint instanceNum, jint dcId) {
@@ -434,17 +434,17 @@ class Delegate : public ConnectiosManagerDelegate {
         jniEnv[instanceNum]->DeleteLocalRef(nonceStr);
     }
 
-    void onCaptchaCheck(int32_t instanceNum, int32_t requestToken, std::string action, std::string key_id) {
+    void onCaptchaCheck(int32_t instanceNum, int32_t requestToken, int32_t generation, std::string action, std::string key_id) {
         jstring actionStr = jniEnv[instanceNum]->NewStringUTF(action.c_str());
         jstring keyIdStr = jniEnv[instanceNum]->NewStringUTF(key_id.c_str());
-        jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onCaptchaCheck, instanceNum, requestToken, actionStr, keyIdStr);
+        jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onCaptchaCheck, instanceNum, requestToken, generation, actionStr, keyIdStr);
         jniEnv[instanceNum]->DeleteLocalRef(actionStr);
         jniEnv[instanceNum]->DeleteLocalRef(keyIdStr);
     }
 
 };
 
-void onHostNameResolved(JNIEnv *env, jclass c, jstring host, jlong address, jstring ip) {
+void onHostNameResolved(JNIEnv *env, jclass c, jstring host, jlong address, jstring ip, jboolean ipv6) {
     const char *ipStr = env->GetStringUTFChars(ip, 0);
     const char *hostStr = env->GetStringUTFChars(host, 0);
     std::string i = std::string(ipStr);
@@ -456,7 +456,7 @@ void onHostNameResolved(JNIEnv *env, jclass c, jstring host, jlong address, jstr
         env->ReleaseStringUTFChars(host, hostStr);
     }
     ConnectionSocket *socket = (ConnectionSocket *) (intptr_t) address;
-    socket->onHostNameResolved(h, i, false);
+    socket->onHostNameResolved(h, i, ipv6);
 }
 
 void discardConnection(JNIEnv *env, jclass c,  jint instanceNum, jint datacenerId, jint connectionType) {
@@ -559,7 +559,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_getCurrentAuthKeyId", "(I)J", (void *) getCurrentAuthKeyId},
         {"native_isTestBackend", "(I)I", (void *) isTestBackend},
         {"native_getTimeDifference", "(I)I", (void *) getTimeDifference},
-        {"native_sendRequest", "(IJIIIZI)V", (void *) sendRequest},
+        {"native_sendRequest", "(IJIIIZII)V", (void *) sendRequest},
         {"native_cancelRequest", "(IIZ)V", (void *) cancelRequest},
         {"native_cleanUp", "(IZ)V", (void *) cleanUp},
         {"native_cancelRequestsForGuid", "(II)V", (void *) cancelRequestsForGuid},
@@ -583,11 +583,11 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_setJava", "(Z)V", (void *) setJava},
         {"native_applyDnsConfig", "(IJLjava/lang/String;I)V", (void *) applyDnsConfig},
         {"native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/RequestTimeDelegate;)J", (void *) checkProxy},
-        {"native_onHostNameResolved", "(Ljava/lang/String;JLjava/lang/String;)V", (void *) onHostNameResolved},
+        {"native_onHostNameResolved", "(Ljava/lang/String;JLjava/lang/String;Z)V", (void *) onHostNameResolved},
         {"native_discardConnection", "(III)V", (void *) discardConnection},
         {"native_failNotRunningRequest", "(II)V", (void *) failNotRunningRequest},
         {"native_receivedIntegrityCheckClassic", "(IILjava/lang/String;Ljava/lang/String;)V", (void *) receivedIntegrityCheckClassic},
-        {"native_receivedCaptchaResult", "(I[ILjava/lang/String;)V", (void *) receivedCaptchaResult},
+        {"native_receivedCaptchaResult", "(IIILjava/lang/String;)V", (void *) receivedCaptchaResult},
         {"native_isGoodPrime", "([BI)Z", (void *) isGoodPrime},
         {"native_importAuthKey", "(II[B)V", (void *) importAuthKey},
         {"native_exportAuthKey", "(II)[B", (void *) exportAuthKey},
@@ -601,7 +601,8 @@ Java_org_telegram_tgnet_ConnectionsManager_native_1test_1AuthAuthorization(JNIEn
     bool error = false;
 
     int constructorId = buffer->readInt32(&error);
-    auth_Authorization::TLdeserialize(buffer, constructorId, 0, error);
+    auth_Authorization *auth = auth_Authorization::TLdeserialize(buffer, constructorId, 0, error);
+    delete auth;
     return !error;
 }
 
@@ -719,7 +720,7 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     if (jclass_ConnectionsManager_onIntegrityCheckClassic == 0) {
         return JNI_FALSE;
     }
-    jclass_ConnectionsManager_onCaptchaCheck = env->GetStaticMethodID(jclass_ConnectionsManager, "onCaptchaCheck", "(IILjava/lang/String;Ljava/lang/String;)V");
+    jclass_ConnectionsManager_onCaptchaCheck = env->GetStaticMethodID(jclass_ConnectionsManager, "onCaptchaCheck", "(IIILjava/lang/String;Ljava/lang/String;)V");
     if (jclass_ConnectionsManager_onCaptchaCheck == 0) {
         return JNI_FALSE;
     }

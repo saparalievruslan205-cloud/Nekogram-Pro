@@ -155,6 +155,9 @@ public class RLottieDrawable extends BitmapDrawable implements Animatable, Bitma
     @UiThread
     private void uiRunnableImpl() {
         singleFrameDecoded = true;
+        if (destroyWhenDone) {
+            loadFrameTask = null;
+        }
         // Static frame: Choreographer won't tick when !isRunning, invalidate manually.
         if (!isRunning && decodeSingleFrame || renderingBitmap == null && nextRenderingBitmap != null) {
             invalidateInternal();
@@ -229,8 +232,17 @@ public class RLottieDrawable extends BitmapDrawable implements Animatable, Bitma
     protected void decodeFrameFinishedInternal() {
         if (destroyWhenDone) {
             checkRunningTasks();
-            if (loadFrameTask == null && cacheGenerateTask == null && nativePtr != null) {
-                recycleNativePtr(true);
+            if (loadFrameTask == null && cacheGenerateTask == null && !generatingCache) {
+                if (nativePtr != null) {
+                    recycleNativePtr(true);
+                }
+                if (bitmapsCache != null) {
+                    bitmapsCache.recycle();
+                    bitmapsCache = null;
+                }
+                recycleResources();
+                destroyWhenDone = false;
+                return;
             }
         }
         if ((nativePtr == null || fallbackCache) && bitmapsCache == null) {
@@ -1289,12 +1301,7 @@ public class RLottieDrawable extends BitmapDrawable implements Animatable, Bitma
         int framesPerUpdates = shouldLimitFps ? 2 : 1;
         int result = generateCacheNative.getFrame(generateCacheFramePointer, bitmap, true);
         if (result == -5) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-            return getNextFrame(bitmap);
+            return -1;
         }
         generateCacheFramePointer += framesPerUpdates;
         return 1;

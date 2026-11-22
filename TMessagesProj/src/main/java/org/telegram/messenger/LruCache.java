@@ -140,6 +140,9 @@ public class LruCache<T> {
                 T value = entry.getValue();
                 size -= safeSizeOf(key, value);
                 iterator.remove();
+                if (size < 0 || map.isEmpty()) {
+                    size = 0;
+                }
 
                 String[] args = key.split("@");
                 if (args.length > 1) {
@@ -172,6 +175,9 @@ public class LruCache<T> {
             previous = map.remove(key);
             if (previous != null) {
                 size -= safeSizeOf(key, previous);
+                if (size < 0 || map.isEmpty()) {
+                    size = 0;
+                }
             }
         }
 
@@ -238,6 +244,10 @@ public class LruCache<T> {
      */
     public final void evictAll() {
         trimToSize(-1, null); // -1 will evict 0-sized elements
+    }
+
+    public final void trimToSize(int maxSize) {
+        trimToSize(maxSize, null);
     }
 
     /**

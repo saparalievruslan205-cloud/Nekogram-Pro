@@ -459,6 +459,9 @@ public class DownloadController extends BaseController implements NotificationCe
         downloadQueueKeys.clear();
         downloadQueuePairs.clear();
         typingTimes.clear();
+        loadingFileObservers.clear();
+        loadingFileMessagesObservers.clear();
+        observersByTag.clear();
     }
 
     public int getMaxVideoBitrate() {
@@ -1351,6 +1354,7 @@ public class DownloadController extends BaseController implements NotificationCe
                 }
                 if (arrayList.isEmpty()) {
                     loadingFileObservers.remove(fileName);
+                    loadingFileMessagesObservers.remove(fileName);
                 }
             }
             observersByTag.remove(observer.getObserverTag());
@@ -1387,6 +1391,7 @@ public class DownloadController extends BaseController implements NotificationCe
                 }
                 if (canceled != 1) {
                     loadingFileObservers.remove(fileName);
+                    loadingFileMessagesObservers.remove(fileName);
                 }
             }
             listenerInProgress = false;

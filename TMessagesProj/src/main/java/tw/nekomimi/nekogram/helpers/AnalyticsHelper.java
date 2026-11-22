@@ -22,6 +22,10 @@ public class AnalyticsHelper {
                 .apply();
     }
 
+    public static void captureException(Exception e) {
+        // Analytics are disabled in this build.
+    }
+
     public static void trackFragmentLifecycle(String lifecycle, BaseFragment fragment) {
         // Analytics are disabled in this build.
     }
