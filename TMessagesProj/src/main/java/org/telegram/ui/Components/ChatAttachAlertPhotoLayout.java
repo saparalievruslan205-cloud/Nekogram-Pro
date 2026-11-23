@@ -81,6 +81,7 @@ import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
+import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.ImageReceiver;
 import org.telegram.messenger.LiteMode;
 import org.telegram.messenger.LocaleController;
@@ -490,10 +491,19 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                 } else if (photoEntry.thumbPath != null) {
                     cell.getImageView().setImage(photoEntry.thumbPath, null, Theme.chat_attachEmptyDrawable);
                 } else if (photoEntry.path != null) {
-                    cell.getImageView().setOrientation(photoEntry.orientation, photoEntry.invert, true);
-                    if (photoEntry.isVideo) {
+                    boolean isVideo = photoEntry.isVideo && !photoEntry.isLivePhoto();
+                    if (photoEntry.mediaStoreUri != null) {
+                        if (isVideo || Build.VERSION.SDK_INT >= 29) {
+                            cell.getImageView().setOrientation(0, true);
+                        } else {
+                            cell.getImageView().setOrientation(photoEntry.orientation, photoEntry.invert, true);
+                        }
+                        cell.getImageView().setImage(ImageLocation.getForMediaStore(photoEntry.mediaStoreUri, photoEntry.imageId, photoEntry.path, isVideo), null, Theme.chat_attachEmptyDrawable, null);
+                    } else if (isVideo) {
+                        cell.getImageView().setOrientation(0, true);
                         cell.getImageView().setImage("vthumb://" + photoEntry.imageId + ":" + photoEntry.path, null, Theme.chat_attachEmptyDrawable);
                     } else {
+                        cell.getImageView().setOrientation(photoEntry.orientation, photoEntry.invert, true);
                         cell.getImageView().setImage("thumb://" + photoEntry.imageId + ":" + photoEntry.path, null, Theme.chat_attachEmptyDrawable);
                     }
                 } else {
@@ -769,15 +779,48 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
     }
 
     private void requestVisibleGalleryPages() {
-        if (pagedGalleryIndex == null || selectedPagedAlbum == null || gridView == null || parentAlert.destroyed) {
+        if (gridView == null || parentAlert.destroyed) {
             return;
         }
         for (int i = 0; i < gridView.getChildCount(); i++) {
             View child = gridView.getChildAt(i);
-            if (child instanceof PhotoAttachPhotoCell && child.getTag() instanceof Integer) {
-                getPhotoEntryAtPosition((Integer) child.getTag());
+            if (!(child instanceof PhotoAttachPhotoCell) || !(child.getTag() instanceof Integer)) {
+                continue;
             }
+            PhotoAttachPhotoCell cell = (PhotoAttachPhotoCell) child;
+            int position = (Integer) child.getTag();
+            if (pagedGalleryIndex != null && selectedPagedAlbum != null) {
+                MediaController.PhotoEntry entry = getPhotoEntryAtPosition(position);
+                if (entry != null && cell.getPhotoEntry() == null) {
+                    bindVisiblePhotoCell(cell, entry, position);
+                    continue;
+                }
+            }
+            cell.reloadThumbnailIfMissing();
         }
+    }
+
+    private void bindVisiblePhotoCell(PhotoAttachPhotoCell cell, MediaController.PhotoEntry photoEntry, int position) {
+        if (parentAlert.avatarPicker != 0 || parentAlert.storyMediaPicker || parentAlert.isPollAttach) {
+            cell.getCheckBox().setVisibility(GONE);
+        } else {
+            cell.getCheckBox().setVisibility(VISIBLE);
+        }
+        cell.setPhotoEntry(photoEntry, selectedPhotos.size() > 1, adapter != null && adapter.needCamera && selectedAlbumEntry == galleryAlbumEntry, adapter != null && position == adapter.getItemCount() - 1, parentAlert != null && parentAlert.allowLivePhotos);
+        if (parentAlert.baseFragment instanceof ChatActivity && parentAlert.allowOrder) {
+            cell.setChecked(selectedPhotosOrder.indexOf(photoEntry.imageId), selectedPhotos.containsKey(photoEntry.imageId), false);
+        } else {
+            cell.setChecked(-1, selectedPhotos.containsKey(photoEntry.imageId), false);
+        }
+        if (!videoEnabled && photoEntry.isVideo) {
+            cell.setAlpha(0.3f);
+        } else if (!photoEnabled && !photoEntry.isVideo) {
+            cell.setAlpha(0.3f);
+        } else {
+            cell.setAlpha(1f);
+        }
+        cell.getImageView().setTag(position);
+        cell.setTag(position);
     }
 
     private MediaController.PhotoEntry getViewerPhotoEntryAtPosition(int index) {
@@ -948,6 +991,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
             @Override
             public void onScrollStateChanged(RecyclerView recyclerView, int newState) {
                 if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    requestVisibleGalleryPages();
                     int offset = dp(13) + (parentAlert.selectedMenuItem != null ? dp(parentAlert.selectedMenuItem.getAlpha() * 26) : 0);
                     int backgroundPaddingTop = parentAlert.getBackgroundPaddingTop();
                     int top = parentAlert.scrollOffsetY[0] - backgroundPaddingTop - offset;

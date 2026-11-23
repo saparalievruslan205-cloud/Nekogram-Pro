@@ -131,6 +131,7 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
     private float spoilerRevealX;
     private float spoilerRevealY;
     private float spoilerMaxRadius;
+    private ValueAnimator spoilerRevealAnimator;
     private SpoilerEffect2 mediaSpoilerEffect2;
     private final Path rectPath = new Path();
     private Text sensitiveText, sensitiveTextShort, sensitiveTextShort2;
@@ -282,7 +283,15 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
         ) {
             return;
         }
+        boolean messageChanged = currentMessageObject != messageObject;
         currentMessageObject = messageObject;
+        if (messageChanged) {
+            if (spoilerRevealAnimator != null) {
+                spoilerRevealAnimator.cancel();
+                spoilerRevealAnimator = null;
+            }
+            spoilerRevealProgress = 0f;
+        }
         isStory = currentMessageObject != null && currentMessageObject.isStory();
         isStoryUploading = currentMessageObject != null && currentMessageObject.uploadingStory != null;
         updateSpoilers2();
@@ -441,7 +450,7 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
             blurImageReceiver.getBitmap().recycle();
             blurImageReceiver.setImageBitmap((Bitmap) null);
         }
-        if (imageReceiver.getBitmap() != null && currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealed) {
+        if (imageReceiver.getBitmap() != null && currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealedInSharedMedia) {
             blurImageReceiver.setImageBitmap(Utilities.stackBlurBitmapMax(imageReceiver.getBitmap()));
         }
         if (messageObject != null && messageObject.storyItem != null) {
@@ -1013,26 +1022,57 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
         canvas.restore();
     }
 
+    public boolean hasUnrevealedSpoiler() {
+        return currentMessageObject != null && currentMessageObject.hasMediaSpoilers() && !currentMessageObject.isMediaSpoilersRevealedInSharedMedia;
+    }
+
     public boolean canRevealSpoiler() {
-        return currentMessageObject != null && currentMessageObject.hasMediaSpoilers() && spoilerRevealProgress == 0f && !currentMessageObject.isMediaSpoilersRevealedInSharedMedia;
+        return hasUnrevealedSpoiler() && spoilerRevealProgress == 0f;
     }
 
     public void startRevealMedia(float x, float y) {
+        final MessageObject revealingMessage = currentMessageObject;
+        if (revealingMessage == null) {
+            return;
+        }
+        if (spoilerRevealAnimator != null) {
+            spoilerRevealAnimator.cancel();
+            spoilerRevealAnimator = null;
+        }
         spoilerRevealX = x;
         spoilerRevealY = y;
 
         spoilerMaxRadius = (float) Math.sqrt(Math.pow(getWidth(), 2) + Math.pow(getHeight(), 2));
         ValueAnimator animator = ValueAnimator.ofFloat(0, 1).setDuration((long) MathUtils.clamp(spoilerMaxRadius * 0.3f, 250, 550));
+        spoilerRevealAnimator = animator;
         animator.setInterpolator(CubicBezierInterpolator.EASE_BOTH);
         animator.addUpdateListener(animation -> {
+            if (currentMessageObject != revealingMessage) {
+                return;
+            }
             spoilerRevealProgress = (float) animation.getAnimatedValue();
             invalidate();
         });
         animator.addListener(new AnimatorListenerAdapter() {
+            private boolean canceled;
+
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                canceled = true;
+                if (spoilerRevealAnimator == animation) {
+                    spoilerRevealAnimator = null;
+                }
+            }
+
             @Override
             public void onAnimationEnd(Animator animation) {
-                currentMessageObject.isMediaSpoilersRevealedInSharedMedia = true;
-                invalidate();
+                if (spoilerRevealAnimator == animation) {
+                    spoilerRevealAnimator = null;
+                }
+                if (!canceled) {
+                    revealingMessage.isMediaSpoilersRevealedInSharedMedia = true;
+                    invalidate();
+                }
             }
         });
         animator.start();
@@ -1158,8 +1198,23 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
     float checkBoxProgress;
 
     public void setChecked(final boolean checked, boolean animated) {
+        setChecked(-1, checked, animated);
+    }
+
+    public void setChecked(int num, final boolean checked, boolean animated) {
         boolean currentIsChecked = checkBoxBase != null && checkBoxBase.isChecked();
         if (currentIsChecked == checked) {
+            if (checkBoxBase != null) {
+                if (checked) {
+                    if (num < 0) {
+                        checkBoxBase.cancelCheckAnimator();
+                    }
+                    checkBoxBase.setNum(num);
+                } else if (!animated) {
+                    checkBoxBase.cancelCheckAnimator();
+                    checkBoxBase.setNum(-1);
+                }
+            }
             return;
         }
         if (checkBoxBase == null) {
@@ -1175,7 +1230,14 @@ public class SharedPhotoVideoCell2 extends FrameLayout {
                 checkBoxBase.onAttachedToWindow();
             }
         }
-        checkBoxBase.setChecked(checked, animated);
+        if (checked && num < 0) {
+            checkBoxBase.cancelCheckAnimator();
+            checkBoxBase.setNum(-1);
+        }
+        checkBoxBase.setChecked(checked ? num : -1, checked, animated);
+        if (!checked && !animated) {
+            checkBoxBase.setNum(-1);
+        }
         if (animator != null) {
             ValueAnimator animatorFinal = animator;
             animator = null;

@@ -145,10 +145,30 @@ public class SharedPhotoVideoCell extends FrameLayout implements Theme.Colorable
         }
 
         public void setChecked(final boolean checked, boolean animated) {
+            setChecked(-1, checked, animated);
+        }
+
+        public void setChecked(int num, final boolean checked, boolean animated) {
             if (checkBox.getVisibility() != VISIBLE) {
                 checkBox.setVisibility(VISIBLE);
             }
-            checkBox.setChecked(checked, animated);
+            boolean currentIsChecked = checkBox.isChecked();
+            if (currentIsChecked == checked && checked) {
+                if (num < 0) {
+                    checkBox.getCheckBoxBase().cancelCheckAnimator();
+                }
+                checkBox.setNum(num);
+                return;
+            }
+            if (checked && num < 0) {
+                checkBox.getCheckBoxBase().cancelCheckAnimator();
+                checkBox.setNum(-1);
+            }
+            checkBox.setChecked(checked ? num : -1, checked, animated);
+            if (!checked && !animated) {
+                checkBox.getCheckBoxBase().cancelCheckAnimator();
+                checkBox.setNum(-1);
+            }
             if (animator != null) {
                 animator.cancel();
                 animator = null;
@@ -367,6 +387,10 @@ public class SharedPhotoVideoCell extends FrameLayout implements Theme.Colorable
 
     public void setChecked(int a, boolean checked, boolean animated) {
         photoVideoViews[a].setChecked(checked, animated);
+    }
+
+    public void setChecked(int a, int num, boolean checked, boolean animated) {
+        photoVideoViews[a].setChecked(num, checked, animated);
     }
 
     public void setItem(int a, int index, MessageObject messageObject) {

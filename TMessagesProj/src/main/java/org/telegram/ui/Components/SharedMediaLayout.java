@@ -36,6 +36,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.HapticFeedbackConstants;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.text.Layout;
 import android.text.SpannableString;
@@ -191,6 +192,7 @@ import tw.nekomimi.nekogram.NekoConfig;
 import tw.nekomimi.nekogram.forward.ForwardContext;
 import tw.nekomimi.nekogram.forward.ForwardDrawable;
 import tw.nekomimi.nekogram.forward.ForwardItem;
+import tw.nekomimi.nekogram.helpers.SelectionMediaGestureController;
 
 @SuppressWarnings("unchecked")
 public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, NotificationCenter.NotificationCenterDelegate, DialogCell.DialogCellDelegate, RecyclerListView.SectionContentAboveTop, ForwardContext {
@@ -277,6 +279,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
     }
 
     public boolean checkPinchToZoom(MotionEvent ev) {
+        if (isMultiselect()) {
+            return false;
+        }
         final int selectedType = mediaPages[0].selectedType;
         if (selectedType == TAB_BOT_PREVIEWS && botPreviewsContainer != null) {
             return botPreviewsContainer.checkPinchToZoom(ev);
@@ -2072,6 +2077,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
 
                 if (NekoConfig.showNoQuoteForward) {
                     forwardNoQuoteItem = createActionModeItem(context, forward_noquote, R.drawable.msg_forward, getString(R.string.NoQuoteForward));
+                    forwardNoQuoteItem.setDelegate(id -> onActionBarItemClick(forwardNoQuoteItem, id));
                     forwardNoQuoteItem.setIcon(new ForwardDrawable(ForwardItem.ID_FORWARD_NOQUOTE, false));
                 }
             }
@@ -2278,6 +2284,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                             if (forwardItem != null) {
                                 forwardItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS ? View.VISIBLE : View.GONE);
                             }
+                            if (forwardNoQuoteItem != null) {
+                                forwardNoQuoteItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS ? View.VISIBLE : View.GONE);
+                            }
                             setSelectedMessagesCount(selectedFiles[0].size() + selectedFiles[1].size(), false);
                             AnimatorSet animatorSet = new AnimatorSet();
                             ArrayList<Animator> animators = new ArrayList<>();
@@ -2295,6 +2304,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                             setSelectedMessagesCount(selectedFiles[0].size() + selectedFiles[1].size(), true);
                         }
                         updateSelection(true);
+                        updateForwardItem();
                         return true;
                     }
                     return false;
@@ -2325,6 +2335,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                             if (forwardItem != null) {
                                 forwardItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS ? View.VISIBLE : View.GONE);
                             }
+                            if (forwardNoQuoteItem != null) {
+                                forwardNoQuoteItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS ? View.VISIBLE : View.GONE);
+                            }
                             AnimatorSet animatorSet = new AnimatorSet();
                             ArrayList<Animator> animators = new ArrayList<>();
                             for (int i = 0; i < actionModeViews.size(); i++) {
@@ -2345,6 +2358,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                             setSelectedMessagesCount(selectedFiles[0].size() + selectedFiles[1].size(), true);
                         }
                         updateSelection(true);
+                        updateForwardItem();
                         return true;
                     }
                     return false;
@@ -3087,81 +3101,14 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                 } else if (mediaPage.selectedType == TAB_PHOTOVIDEO && view instanceof SharedPhotoVideoCell2) {
                     final SharedPhotoVideoCell2 cell = (SharedPhotoVideoCell2) view;
                     final MessageObject messageObject = cell.getMessageObject();
-                    if (messageObject != null && messageObject.isSensitive()) {
-                        if (profileActivity == null) return;
-                        final int currentAccount = profileActivity.getCurrentAccount();
-                        final MessagesController messagesController = MessagesController.getInstance(currentAccount);
-                        final AlertDialog progressDialog = new AlertDialog(context, AlertDialog.ALERT_TYPE_SPINNER);
-                        progressDialog.showDelayed(200);
-                        messagesController.getContentSettings(settings -> {
-                            progressDialog.dismissUnless(200);
-                            final boolean needsVerification = messagesController.config.needAgeVideoVerification.get() && !TextUtils.isEmpty(messagesController.verifyAgeBotUsername);
-                            final boolean cannotView = !(settings != null && settings.sensitive_can_change) && needsVerification;
-                            boolean[] always = new boolean[1];
-                            FrameLayout frameLayout = new FrameLayout(context);
-                            if (needsVerification) {
-                                always[0] = true;
-                            } else if (settings != null && settings.sensitive_can_change) {
-                                CheckBoxCell checkbox = new CheckBoxCell(context, 1, profileActivity == null ? null : profileActivity.getResourceProvider());
-                                checkbox.setBackground(Theme.getSelectorDrawable(false));
-                                checkbox.setText(getString(R.string.MessageShowSensitiveContentAlways), "", always[0], false);
-                                checkbox.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
-                                frameLayout.addView(checkbox, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 48, Gravity.TOP | Gravity.LEFT, 0, 0, 0, 0));
-                                checkbox.setOnClickListener(v -> {
-                                    CheckBoxCell cell1 = (CheckBoxCell) v;
-                                    always[0] = !always[0];
-                                    cell1.setChecked(always[0], true);
-                                });
-                            }
-                            final AlertDialog.Builder alert = new AlertDialog.Builder(context, profileActivity == null ? null : profileActivity.getResourceProvider())
-                                .setTitle(getString(R.string.MessageShowSensitiveContentMediaTitle))
-                                .setMessage(getString(cannotView ? R.string.MessageShowSensitiveContentMediaTextClosed : R.string.MessageShowSensitiveContentMediaText))
-                                .setView(frameLayout).setCustomViewOffset(9)
-                                .setNegativeButton(getString(cannotView ? R.string.MessageShowSensitiveContentMediaTextClosedButton : R.string.Cancel), null);
-                            if (!cannotView) {
-                                alert.setPositiveButton(getString(R.string.MessageShowSensitiveContentButton), (di, w) -> {
-                                    final Utilities.Callback<Boolean> reveal = (all) -> {
-                                        cell.startRevealMedia(x, y);
-                                    };
-                                    if (always[0]) {
-                                        if (needsVerification || settings != null && settings.sensitive_can_change) {
-                                            final BaseFragment lastFragment1 = LaunchActivity.getSafeLastFragment();
-                                            ThemeActivity.verifyAge(context, currentAccount, passed -> {
-                                                final BaseFragment lastFragment2 = LaunchActivity.getSafeLastFragment();
-                                                if (passed) {
-                                                    messagesController.setContentSettings(true);
-                                                    if (lastFragment2 != null) {
-                                                        BulletinFactory.of(lastFragment2)
-                                                            .createSimpleBulletinDetail(R.raw.chats_infotip, AndroidUtilities.replaceArrows(AndroidUtilities.premiumText(getString(R.string.SensitiveContentSettingsToast), () -> {
-                                                                lastFragment2.presentFragment(new ThemeActivity(ThemeActivity.THEME_TYPE_BASIC).highlightSensitiveRow());
-                                                            }), true))
-                                                            .show(true);
-                                                    }
-                                                    reveal.run(true);
-                                                } else if (lastFragment2 != null) {
-                                                    BulletinFactory.of(lastFragment2)
-                                                        .createSimpleBulletin(R.raw.error, getString(R.string.AgeVerificationFailedTitle), getString(R.string.AgeVerificationFailedText))
-                                                        .show();
-                                                }
-                                            }, lastFragment1 == null ? null : lastFragment1.getResourceProvider());
-                                        } else {
-                                            reveal.run(true);
-                                        }
-                                    } else {
-                                        reveal.run(false);
-                                    }
-                                });
-                            }
-                            if (profileActivity != null && profileActivity.getContext() != null) {
-                                profileActivity.showDialog(alert.create());
-                            } else {
-                                alert.show();
-                            }
-                        });
+                    if (messageObject != null && messageObject.isSensitive() && !messageObject.isMediaSpoilersRevealedInSharedMedia) {
+                        showSensitiveContentDialog(cell, x, y);
                         return;
                     }
-                    if (cell.canRevealSpoiler()) {
-                        cell.startRevealMedia(x, y);
+                    if (cell.hasUnrevealedSpoiler()) {
+                        if (cell.canRevealSpoiler()) {
+                            cell.startRevealMedia(x, y);
+                        }
                         return;
                     }
                     if (messageObject != null) {
@@ -3377,6 +3324,13 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                         return false;
                     }
                     if (isActionModeShowed && mediaPage.selectedType != TAB_SAVED_DIALOGS) {
+                        if ((mediaPage.selectedType == TAB_PHOTOVIDEO && view instanceof SharedPhotoVideoCell2)
+                                || (mediaPage.selectedType == TAB_GIF && view instanceof ContextLinkCell)) {
+                            if (getSelectableMessageAtPosition(mediaPage, position) != null) {
+                                startMultiselect(mediaPage, position, true, view, x, y);
+                                return true;
+                            }
+                        }
                         mediaPage.listView.clickItem(view, position);
                         return true;
                     }
@@ -3409,8 +3363,21 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                     } else if ((mediaPage.selectedType == TAB_VOICE || mediaPage.selectedType == TAB_AUDIO) && view instanceof SharedAudioCell) {
                         return onItemLongClick(((SharedAudioCell) view).getMessage(), view, 0);
                     } else if (mediaPage.selectedType == TAB_GIF && view instanceof ContextLinkCell) {
-                        return onItemLongClick((MessageObject) ((ContextLinkCell) view).getParentObject(), view, 0);
-                    } else if ((mediaPage.selectedType == TAB_PHOTOVIDEO || isAnyStoryPageType(mediaPage.selectedType) && canEditStories()) && view instanceof SharedPhotoVideoCell2) {
+                        boolean started = onItemLongClick((MessageObject) ((ContextLinkCell) view).getParentObject(), view, 0);
+                        if (started) {
+                            startMultiselect(mediaPage, position, false, view, x, y);
+                        }
+                        return started;
+                    } else if (mediaPage.selectedType == TAB_PHOTOVIDEO && view instanceof SharedPhotoVideoCell2) {
+                        MessageObject messageObject = ((SharedPhotoVideoCell2) view).getMessageObject();
+                        if (messageObject != null) {
+                            boolean started = onItemLongClick(messageObject, view, mediaPage.selectedType);
+                            if (started) {
+                                startMultiselect(mediaPage, position, false, view, x, y);
+                            }
+                            return started;
+                        }
+                    } else if (isAnyStoryPageType(mediaPage.selectedType) && canEditStories() && view instanceof SharedPhotoVideoCell2) {
                         MessageObject messageObject = ((SharedPhotoVideoCell2) view).getMessageObject();
                         if (messageObject != null) {
                             return onItemLongClick(messageObject, view, mediaPage.selectedType);
@@ -3770,17 +3737,87 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
             ThemeBind.selectorBackground(forwardItem, Theme.createSelectorDrawable(getThemedColor(Theme.key_actionBarActionModeDefaultSelector), 5), null, ThemeBind.of(Theme.key_actionBarActionModeDefaultSelector), resourcesProvider);
             if (forwardNoQuoteItem != null) ThemeBind.selectorBackground(forwardNoQuoteItem, Theme.createSelectorDrawable(getThemedColor(Theme.key_actionBarActionModeDefaultSelector), 5), null, ThemeBind.of(Theme.key_actionBarActionModeDefaultSelector), resourcesProvider);
         }
-        ForwardItem.setupForwardItem(forwardItem, ForwardItem.hasCaption(getForwardingMessages()), resourcesProvider, id -> onActionBarItemClick(forwardItem, id));
+        boolean hasCaption = ForwardItem.hasCaption(getForwardingMessages());
+        ForwardItem.setupForwardItem(forwardItem, hasCaption, resourcesProvider, id -> onActionBarItemClick(forwardItem, id));
+        if (forwardNoQuoteItem != null) {
+            ForwardItem.setupNoQuoteForwardItem(forwardNoQuoteItem, hasCaption, resourcesProvider, id -> onActionBarItemClick(forwardNoQuoteItem, id));
+        }
     }
 
     private boolean isMessageSelected(MessageObject message) {
-        return selectedFiles[message.getDialogId() == dialog_id ? 0 : 1].get(message.getId()) != null;
+        return message != null && selectedFiles[message.getDialogId() == dialog_id ? 0 : 1].get(message.getId()) != null;
     }
 
     private void recordSelectedMessageOrder(MessageObject message) {
         selectedMessagesInSelectionOrder.removeIf(existing -> !isMessageSelected(existing)
                 || existing.getDialogId() == message.getDialogId() && existing.getId() == message.getId());
         selectedMessagesInSelectionOrder.add(message);
+    }
+
+    private void removeSelectedMessageOrder(MessageObject message) {
+        if (message == null) {
+            return;
+        }
+        selectedMessagesInSelectionOrder.removeIf(existing -> !isMessageSelected(existing)
+                || existing.getDialogId() == message.getDialogId() && existing.getId() == message.getId());
+    }
+
+    private int getSelectionOrderNumber(MessageObject messageObject) {
+        if (messageObject == null || !isMessageSelected(messageObject)) {
+            return -1;
+        }
+        int selectedNumber = 0;
+        for (int i = 0; i < selectedMessagesInSelectionOrder.size(); i++) {
+            MessageObject selected = selectedMessagesInSelectionOrder.get(i);
+            if (isMessageSelected(selected)) {
+                if (selected.getDialogId() == messageObject.getDialogId() && selected.getId() == messageObject.getId()) {
+                    return selectedNumber;
+                }
+                selectedNumber++;
+            }
+        }
+        ArrayList<MessageObject> ordered = getSelectedMessagesInSelectionOrder();
+        for (int i = 0; i < ordered.size(); i++) {
+            MessageObject selected = ordered.get(i);
+            if (selected.getDialogId() == messageObject.getDialogId() && selected.getId() == messageObject.getId()) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void updateSelectionOrderBadges() {
+        for (int i = 0; i < mediaPages.length; i++) {
+            if (mediaPages[i] == null || mediaPages[i].listView == null) {
+                continue;
+            }
+            updateSelectionOrderBadges(mediaPages[i].listView);
+            if (mediaPages[i].animationSupportingListView != null) {
+                updateSelectionOrderBadges(mediaPages[i].animationSupportingListView);
+            }
+        }
+    }
+
+    private void updateSelectionOrderBadges(RecyclerListView listView) {
+        int count = listView.getChildCount();
+        for (int a = 0; a < count; a++) {
+            View child = listView.getChildAt(a);
+            if (child instanceof SharedPhotoVideoCell2) {
+                SharedPhotoVideoCell2 cell = (SharedPhotoVideoCell2) child;
+                MessageObject message = cell.getMessageObject();
+                if (message != null && !cell.isStory && isMessageSelected(message)) {
+                    cell.setChecked(getSelectionOrderNumber(message), true, false);
+                }
+            } else if (child instanceof SharedPhotoVideoCell) {
+                SharedPhotoVideoCell cell = (SharedPhotoVideoCell) child;
+                for (int b = 0; b < 6; b++) {
+                    MessageObject message = cell.getMessageObject(b);
+                    if (message != null && isMessageSelected(message)) {
+                        cell.setChecked(b, getSelectionOrderNumber(message), true, false);
+                    }
+                }
+            }
+        }
     }
 
     private ArrayList<MessageObject> getSelectedMessagesInSelectionOrder() {
@@ -3812,6 +3849,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                             selectedMessagesInSelectionOrder.add(message);
                         }
                     }
+                    updateSelectionOrderBadges();
                 }, message -> {
                     ArrayList<MessageObject> previews = new ArrayList<>();
                     for (MessageObject selected : getSelectedMessagesInSelectionOrder()) {
@@ -5371,7 +5409,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                 }
                 return;
             }
-            ForwardItem.setLastForwardOption(id);
+            if (v != forwardNoQuoteItem) {
+                ForwardItem.setLastForwardOption(id);
+            }
             setForwardParams(id == forward_noquote, id == forward_nocaption);
             if (NekoConfig.quickForward) {
                 openShareAlert(profileActivity, null, () -> {
@@ -5778,7 +5818,18 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
 
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
+        if (isMultiselect()) {
+            maybeStartTracking = false;
+            startedTracking = false;
+            return false;
+        }
         return checkTabsAnimationInProgress() || scrollSlidingTextTabStrip.isAnimatingIndicator() || onTouchEvent(ev);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        cancelAllMultiselect();
+        super.onDetachedFromWindow();
     }
 
     public boolean isCurrentTabFirst() {
@@ -6067,6 +6118,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
 
     protected void showActionMode(boolean show) {
         if (!show) {
+            cancelAllMultiselect();
             selectedMessagesInSelectionOrder.clear();
         }
         if (isActionModeShowed == show) {
@@ -7642,6 +7694,311 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
         }
     }
 
+    private final SelectionMediaGestureController selectionMediaGestureController = new SelectionMediaGestureController();
+
+    public boolean isMultiselect() {
+        if (mediaPages == null) {
+            return false;
+        }
+        for (MediaPage page : mediaPages) {
+            if (page != null && page.listView != null && page.listView.isMultiselect()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void cancelAllMultiselect() {
+        selectionMediaGestureController.cancel();
+        if (mediaPages == null) {
+            return;
+        }
+        for (MediaPage page : mediaPages) {
+            if (page != null && page.listView != null && page.listView.isMultiselect()) {
+                page.listView.cancelMultiselect();
+            }
+        }
+    }
+
+    private void showSensitiveContentDialog(SharedPhotoVideoCell2 cell, float x, float y) {
+        if (profileActivity == null || cell == null) {
+            return;
+        }
+        final Context context = getContext();
+        final int currentAccount = profileActivity.getCurrentAccount();
+        final MessagesController messagesController = MessagesController.getInstance(currentAccount);
+        final AlertDialog progressDialog = new AlertDialog(context, AlertDialog.ALERT_TYPE_SPINNER);
+        progressDialog.showDelayed(200);
+        messagesController.getContentSettings(settings -> {
+            progressDialog.dismissUnless(200);
+            final boolean needsVerification = messagesController.config.needAgeVideoVerification.get() && !TextUtils.isEmpty(messagesController.verifyAgeBotUsername);
+            final boolean cannotView = !(settings != null && settings.sensitive_can_change) && needsVerification;
+            boolean[] always = new boolean[1];
+            FrameLayout frameLayout = new FrameLayout(context);
+            if (needsVerification) {
+                always[0] = true;
+            } else if (settings != null && settings.sensitive_can_change) {
+                CheckBoxCell checkbox = new CheckBoxCell(context, 1, profileActivity == null ? null : profileActivity.getResourceProvider());
+                checkbox.setBackground(Theme.getSelectorDrawable(false));
+                checkbox.setText(getString(R.string.MessageShowSensitiveContentAlways), "", always[0], false);
+                checkbox.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
+                frameLayout.addView(checkbox, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 48, Gravity.TOP | Gravity.LEFT, 0, 0, 0, 0));
+                checkbox.setOnClickListener(v -> {
+                    CheckBoxCell cell1 = (CheckBoxCell) v;
+                    always[0] = !always[0];
+                    cell1.setChecked(always[0], true);
+                });
+            }
+            final AlertDialog.Builder alert = new AlertDialog.Builder(context, profileActivity == null ? null : profileActivity.getResourceProvider())
+                .setTitle(getString(R.string.MessageShowSensitiveContentMediaTitle))
+                .setMessage(getString(cannotView ? R.string.MessageShowSensitiveContentMediaTextClosed : R.string.MessageShowSensitiveContentMediaText))
+                .setView(frameLayout).setCustomViewOffset(9)
+                .setNegativeButton(getString(cannotView ? R.string.MessageShowSensitiveContentMediaTextClosedButton : R.string.Cancel), null);
+            if (!cannotView) {
+                alert.setPositiveButton(getString(R.string.MessageShowSensitiveContentButton), (di, w) -> {
+                    final Utilities.Callback<Boolean> reveal = (all) -> {
+                        cell.startRevealMedia(x, y);
+                    };
+                    if (always[0]) {
+                        if (needsVerification || settings != null && settings.sensitive_can_change) {
+                            final BaseFragment lastFragment1 = LaunchActivity.getSafeLastFragment();
+                            ThemeActivity.verifyAge(context, currentAccount, passed -> {
+                                final BaseFragment lastFragment2 = LaunchActivity.getSafeLastFragment();
+                                if (passed) {
+                                    messagesController.setContentSettings(true);
+                                    if (lastFragment2 != null) {
+                                        BulletinFactory.of(lastFragment2)
+                                            .createSimpleBulletinDetail(R.raw.chats_infotip, AndroidUtilities.replaceArrows(AndroidUtilities.premiumText(getString(R.string.SensitiveContentSettingsToast), () -> {
+                                                lastFragment2.presentFragment(new ThemeActivity(ThemeActivity.THEME_TYPE_BASIC).highlightSensitiveRow());
+                                            }), true))
+                                            .show(true);
+                                    }
+                                    reveal.run(true);
+                                } else if (lastFragment2 != null) {
+                                    BulletinFactory.of(lastFragment2)
+                                        .createSimpleBulletin(R.raw.error, getString(R.string.AgeVerificationFailedTitle), getString(R.string.AgeVerificationFailedText))
+                                        .show();
+                                }
+                            }, lastFragment1 == null ? null : lastFragment1.getResourceProvider());
+                        } else {
+                            reveal.run(true);
+                        }
+                    } else {
+                        reveal.run(false);
+                    }
+                });
+            }
+            if (profileActivity != null && profileActivity.getContext() != null) {
+                profileActivity.showDialog(alert.create());
+            } else {
+                alert.show();
+            }
+        });
+    }
+
+    private void openMediaPreview(int index, MessageObject message, int selectedMode) {
+        if (profileActivity == null || profileActivity.getParentActivity() == null || message == null) {
+            return;
+        }
+        if (selectedMode == TAB_PHOTOVIDEO) {
+            int i = index - sharedMediaData[selectedMode].startOffset;
+            if (i >= 0 && i < sharedMediaData[selectedMode].messages.size()) {
+                PhotoViewer.getInstance().setParentActivity(profileActivity);
+                PhotoViewer.getInstance().openPhoto(sharedMediaData[selectedMode].messages, i, dialog_id, mergeDialogId, topicId, provider);
+            }
+        } else if (selectedMode == TAB_GIF) {
+            PhotoViewer.getInstance().setParentActivity(profileActivity);
+            int i = sharedMediaData[selectedMode].messages.indexOf(message);
+            if (i < 0) {
+                ArrayList<MessageObject> documents = new ArrayList<>();
+                documents.add(message);
+                PhotoViewer.getInstance().openPhoto(documents, 0, 0, 0, 0, provider);
+            } else {
+                PhotoViewer.getInstance().openPhoto(sharedMediaData[selectedMode].messages, i, dialog_id, mergeDialogId, topicId, provider);
+            }
+        }
+    }
+
+    private void openSelectedMediaPreview(MediaPage mediaPage, int position, @Nullable View view, float x, float y) {
+        if (mediaPage == null || profileActivity == null || profileActivity.getParentActivity() == null) {
+            return;
+        }
+        if (mediaPage.selectedType == TAB_PHOTOVIDEO && view instanceof SharedPhotoVideoCell2) {
+            SharedPhotoVideoCell2 cell = (SharedPhotoVideoCell2) view;
+            MessageObject messageObject = cell.getMessageObject();
+            if (messageObject == null) {
+                return;
+            }
+            if (messageObject.isSensitive() && !messageObject.isMediaSpoilersRevealedInSharedMedia) {
+                showSensitiveContentDialog(cell, x, y);
+                return;
+            }
+            if (cell.hasUnrevealedSpoiler()) {
+                if (cell.canRevealSpoiler()) {
+                    cell.startRevealMedia(x, y);
+                }
+                return;
+            }
+            openMediaPreview(position, messageObject, mediaPage.selectedType);
+        } else if (mediaPage.selectedType == TAB_GIF && view instanceof ContextLinkCell) {
+            MessageObject messageObject = (MessageObject) ((ContextLinkCell) view).getParentObject();
+            if (messageObject != null) {
+                openMediaPreview(position, messageObject, mediaPage.selectedType);
+            }
+        }
+    }
+
+    @Nullable
+    private MessageObject getSelectableMessageAtPosition(MediaPage mediaPage, int position) {
+        if (mediaPage == null || mediaPage.listView == null || position < 0) {
+            return null;
+        }
+        if (mediaPage.selectedType == TAB_PHOTOVIDEO && mediaPage.listView.getAdapter() == photoVideoAdapter) {
+            int i = position - sharedMediaData[TAB_PHOTOVIDEO].getStartOffset();
+            ArrayList<MessageObject> messages = sharedMediaData[TAB_PHOTOVIDEO].getMessages();
+            if (i >= 0 && i < messages.size()) {
+                return messages.get(i);
+            }
+        } else if (mediaPage.selectedType == TAB_GIF && mediaPage.listView.getAdapter() == gifAdapter) {
+            ArrayList<MessageObject> messages = sharedMediaData[TAB_GIF].messages;
+            if (position < messages.size()) {
+                return messages.get(position);
+            }
+        }
+        return null;
+    }
+
+    private void startMultiselect(MediaPage mediaPage, int position, boolean deferredAnchor, @Nullable View anchorView, float anchorX, float anchorY) {
+        if (mediaPage == null || mediaPage.listView == null) {
+            return;
+        }
+        MessageObject anchorMessage = getSelectableMessageAtPosition(mediaPage, position);
+        if (anchorMessage == null) {
+            return;
+        }
+        final int selectedType = mediaPage.selectedType;
+        final boolean isCurrentlySelected = isMessageSelected(anchorMessage);
+        final boolean unselect = deferredAnchor ? isCurrentlySelected : !isCurrentlySelected;
+        final SparseArray<MessageObject> alreadySelectedIds = new SparseArray<>();
+        for (int i = 0; i < selectedFiles[0].size(); i++) {
+            alreadySelectedIds.put(selectedFiles[0].keyAt(i), selectedFiles[0].valueAt(i));
+        }
+        for (int i = 0; i < selectedFiles[1].size(); i++) {
+            alreadySelectedIds.put(selectedFiles[1].keyAt(i), selectedFiles[1].valueAt(i));
+        }
+        maybeStartTracking = false;
+        startedTracking = false;
+        if (deferredAnchor) {
+            selectionMediaGestureController.arm(() -> {
+                mediaPage.listView.cancelMultiselect();
+                if (anchorView != null) {
+                    try {
+                        anchorView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    } catch (Exception ignored) {
+                    }
+                }
+                openSelectedMediaPreview(mediaPage, position, anchorView, anchorX, anchorY);
+            }, () -> {
+                if (!isActionModeShowed) {
+                    return;
+                }
+                RecyclerView.ViewHolder holder = mediaPage.listView.findViewHolderForAdapterPosition(position);
+                View cellView = holder != null ? holder.itemView : anchorView;
+                onItemClick(position, cellView, anchorMessage, 0, selectedType);
+            });
+        } else {
+            selectionMediaGestureController.cancel();
+        }
+        mediaPage.listView.startMultiselect(position, false, new RecyclerListView.onMultiSelectionChanged() {
+            boolean limitReached;
+
+            @Override
+            public void onSelectionChanged(int pos, boolean selected, float x, float y) {
+                if (!isActionModeShowed) {
+                    return;
+                }
+                if (unselect) {
+                    selected = !selected;
+                }
+                MessageObject msg = getSelectableMessageAtPosition(mediaPage, pos);
+                if (msg == null) {
+                    return;
+                }
+                boolean currentlySelected = isMessageSelected(msg);
+                if (selected == currentlySelected) {
+                    return;
+                }
+                if (selected && selectedFiles[0].size() + selectedFiles[1].size() >= 100) {
+                    limitReached = true;
+                    return;
+                }
+                limitReached = false;
+                RecyclerView.ViewHolder holder = mediaPage.listView.findViewHolderForAdapterPosition(pos);
+                onItemClick(pos, holder != null ? holder.itemView : null, msg, 0, selectedType);
+            }
+
+            @Override
+            public boolean canSelect(int pos) {
+                MessageObject msg = getSelectableMessageAtPosition(mediaPage, pos);
+                if (msg == null) {
+                    return false;
+                }
+                if (!unselect && alreadySelectedIds.get(msg.getId(), null) == null) {
+                    return true;
+                }
+                if (unselect && alreadySelectedIds.get(msg.getId(), null) != null) {
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public int checkPosition(int pos, boolean selectionTop) {
+                return pos;
+            }
+
+            @Override
+            public boolean limitReached() {
+                return limitReached;
+            }
+
+            @Override
+            public void getPaddings(int[] paddings) {
+                paddings[0] = mediaPage.listView.getPaddingTop();
+                int bottom = mediaPage.listView.getPaddingBottom();
+                View parent = (View) getParent();
+                if (parent != null && getY() + getMeasuredHeight() > parent.getMeasuredHeight()) {
+                    bottom += (int) (getY() + getMeasuredHeight() - parent.getMeasuredHeight());
+                }
+                paddings[1] = bottom;
+            }
+
+            @Override
+            public void scrollBy(int dy) {
+                mediaPage.listView.scrollBy(0, dy);
+            }
+
+            @Override
+            public boolean allowHorizontalDrag() {
+                return true;
+            }
+
+            @Override
+            public void onMultiselectDragStarted() {
+                if (deferredAnchor) {
+                    selectionMediaGestureController.onDragStarted();
+                }
+            }
+
+            @Override
+            public void onMultiselectEnded(boolean dragStarted, boolean canceled) {
+                if (deferredAnchor) {
+                    selectionMediaGestureController.onGestureEnded(dragStarted, canceled);
+                }
+            }
+        });
+    }
+
     private boolean onItemLongClick(MessageObject item, View view, int a) {
         return onItemLongClick(item, view, a, true);
     }
@@ -7786,6 +8143,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
         if (forwardItem != null) {
             forwardItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS && getClosestTab() != TAB_GIFTS ? View.VISIBLE : View.GONE);
         }
+        if (forwardNoQuoteItem != null) {
+            forwardNoQuoteItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS && getClosestTab() != TAB_GIFTS ? View.VISIBLE : View.GONE);
+        }
         setSelectedMessagesCount(1, false);
         AnimatorSet animatorSet = new AnimatorSet();
         ArrayList<Animator> animators = new ArrayList<>();
@@ -7801,7 +8161,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
         if (view instanceof SharedDocumentCell) {
             ((SharedDocumentCell) view).setChecked(true, true);
         } else if (view instanceof SharedPhotoVideoCell) {
-            ((SharedPhotoVideoCell) view).setChecked(a, true, true);
+            ((SharedPhotoVideoCell) view).setChecked(a, getSelectionOrderNumber(item), true, true);
         } else if (view instanceof SharedLinkCell) {
             ((SharedLinkCell) view).setChecked(true, true);
         } else if (view instanceof SharedAudioCell) {
@@ -7809,7 +8169,8 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
         } else if (view instanceof ContextLinkCell) {
             ((ContextLinkCell) view).setChecked(true, true);
         } else if (view instanceof SharedPhotoVideoCell2) {
-            ((SharedPhotoVideoCell2) view).setChecked(true, true);
+            SharedPhotoVideoCell2 cell = (SharedPhotoVideoCell2) view;
+            cell.setChecked(cell.isStory ? -1 : getSelectionOrderNumber(item), true, true);
         }
         if (!isActionModeShowed) {
             showActionMode(true);
@@ -7831,8 +8192,11 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                 return;
             }
             int loadIndex = message.getDialogId() == dialog_id ? 0 : 1;
+            boolean unselected = false;
             if (selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0) {
                 selectedFiles[loadIndex].remove(message.getId());
+                removeSelectedMessageOrder(message);
+                unselected = true;
                 if (!message.canDeleteMessage(false, null)) {
                     cantDeleteMessagesCount--;
                 }
@@ -7858,43 +8222,39 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                 if (forwardItem != null) {
                     forwardItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS && getClosestTab() != TAB_GIFTS ? View.VISIBLE : View.GONE);
                 }
+                if (forwardNoQuoteItem != null) {
+                    forwardNoQuoteItem.setVisibility(getClosestTab() != TAB_STORIES && getClosestTab() != TAB_BOT_PREVIEWS && getClosestTab() != TAB_GIFTS ? View.VISIBLE : View.GONE);
+                }
                 updateStoriesPinButton();
             }
             scrolling = false;
+            boolean checked = selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0;
             if (view instanceof SharedDocumentCell) {
-                ((SharedDocumentCell) view).setChecked(selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                ((SharedDocumentCell) view).setChecked(checked, true);
             } else if (view instanceof SharedPhotoVideoCell) {
-                ((SharedPhotoVideoCell) view).setChecked(a, selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                ((SharedPhotoVideoCell) view).setChecked(a, checked ? getSelectionOrderNumber(message) : -1, checked, true);
             } else if (view instanceof SharedLinkCell) {
-                ((SharedLinkCell) view).setChecked(selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                ((SharedLinkCell) view).setChecked(checked, true);
             } else if (view instanceof SharedAudioCell) {
-                ((SharedAudioCell) view).setChecked(selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                ((SharedAudioCell) view).setChecked(checked, true);
             } else if (view instanceof ContextLinkCell) {
-                ((ContextLinkCell) view).setChecked(selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                ((ContextLinkCell) view).setChecked(checked, true);
             } else if (view instanceof SharedPhotoVideoCell2) {
-                ((SharedPhotoVideoCell2) view).setChecked(selectedFiles[loadIndex].indexOfKey(message.getId()) >= 0, true);
+                SharedPhotoVideoCell2 cell = (SharedPhotoVideoCell2) view;
+                cell.setChecked(checked && !cell.isStory ? getSelectionOrderNumber(message) : -1, checked, true);
+            }
+            if (unselected && (selectedFiles[0].size() > 0 || selectedFiles[1].size() > 0)) {
+                updateSelectionOrderBadges();
             }
         } else {
             if (selectedMode == TAB_PHOTOVIDEO) {
-                int i = index - sharedMediaData[selectedMode].startOffset;
-                if (i >= 0 && i < sharedMediaData[selectedMode].messages.size()) {
-                    PhotoViewer.getInstance().setParentActivity(profileActivity);
-                    PhotoViewer.getInstance().openPhoto(sharedMediaData[selectedMode].messages, i, dialog_id, mergeDialogId, topicId, provider);
-                }
+                openMediaPreview(index, message, selectedMode);
             } else if (selectedMode == TAB_VOICE || selectedMode == TAB_AUDIO) {
                 if (view instanceof SharedAudioCell) {
                     ((SharedAudioCell) view).didPressedButton();
                 }
-            } else if (selectedMode == 5) {
-                PhotoViewer.getInstance().setParentActivity(profileActivity);
-                index = sharedMediaData[selectedMode].messages.indexOf(message);
-                if (index < 0) {
-                    ArrayList<MessageObject> documents = new ArrayList<>();
-                    documents.add(message);
-                    PhotoViewer.getInstance().openPhoto(documents, 0, 0, 0, 0, provider);
-                } else {
-                    PhotoViewer.getInstance().openPhoto(sharedMediaData[selectedMode].messages, index, dialog_id, mergeDialogId, topicId, provider);
-                }
+            } else if (selectedMode == TAB_GIF) {
+                openMediaPreview(index, message, selectedMode);
             } else if (selectedMode == TAB_FILES) {
                 if (view instanceof SharedDocumentCell) {
                     SharedDocumentCell cell = (SharedDocumentCell) view;
@@ -8638,7 +8998,8 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                     boolean animated = messageObject.getId() == oldMessageId;
 
                     if (isActionModeShowed) {
-                        cell.setChecked(selectedFiles[messageObject.getDialogId() == dialog_id ? 0 : 1].indexOfKey(messageObject.getId()) >= 0, animated);
+                        boolean checked = isMessageSelected(messageObject);
+                        cell.setChecked(checked ? getSelectionOrderNumber(messageObject) : -1, checked, animated);
                     } else {
                         cell.setChecked(false, animated);
                     }
@@ -9878,6 +10239,9 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
                     }
                     if (forwardItem != null) {
                         forwardItem.setVisibility(View.GONE);
+                    }
+                    if (forwardNoQuoteItem != null) {
+                        forwardNoQuoteItem.setVisibility(View.GONE);
                     }
                 }
             }
@@ -13403,7 +13767,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
             }
             lastActionModeIconColor = iconColor;
             lastActionModeSelectorColor = selectorColor;
-            final ActionBarMenuItem[] items = new ActionBarMenuItem[] { gotoItem, forwardItem, pinItem, unpinItem, deleteItem };
+            final ActionBarMenuItem[] items = new ActionBarMenuItem[] { gotoItem, forwardItem, forwardNoQuoteItem, pinItem, unpinItem, deleteItem };
             for (ActionBarMenuItem item : items) {
                 if (item == null) continue;
                 item.setIconColor(iconColor);

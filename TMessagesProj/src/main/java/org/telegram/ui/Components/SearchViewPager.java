@@ -912,9 +912,8 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
             speedItem.setVisibility(isSpeedItemVisible() ? View.VISIBLE : View.GONE);
             gotoItem.setVisibility(View.VISIBLE);
             forwardItem.setVisibility(View.VISIBLE);
-            ForwardItem.setupForwardItem(forwardItem, ForwardItem.hasCaption(selectedFiles.values()), null, this::onActionBarItemClick);
             forwardNoQuoteItem.setVisibility(NekoConfig.showNoQuoteForward ? View.VISIBLE : View.GONE);
-            forwardNoQuoteItem.setIcon(new ForwardDrawable(ForwardItem.ID_FORWARD_NOQUOTE, false));
+            updateForwardItems();
             deleteItem.setVisibility(View.VISIBLE);
         } else {
             parent.getActionBar().hideActionMode();
@@ -936,6 +935,19 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
                 if (v instanceof FilteredSearchView) {
                     ((FilteredSearchView) v).update();
                 }
+            }
+        }
+    }
+
+    private void updateForwardItems() {
+        boolean hasCaption = ForwardItem.hasCaption(selectedFiles.values());
+        if (forwardItem != null) {
+            ForwardItem.setupForwardItem(forwardItem, hasCaption, null, this::onActionBarItemClick);
+        }
+        if (forwardNoQuoteItem != null) {
+            forwardNoQuoteItem.setVisibility(NekoConfig.showNoQuoteForward ? View.VISIBLE : View.GONE);
+            if (NekoConfig.showNoQuoteForward) {
+                ForwardItem.setupNoQuoteForwardItem(forwardNoQuoteItem, hasCaption, null, id -> onForwardAction(id, false));
             }
         }
     }
@@ -1004,63 +1016,69 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
                 }
             });
         } else if (id == forwardItemId || id == forwardNoQuoteItemId || id == forwardNoCaptionItemId) {
-            ForwardItem.setLastForwardOption(id);
-            ArrayList<MessageObject> fmessages = new ArrayList<>(selectedFiles.values());
-            ForwardContext forwardContext = () -> fmessages;
-            forwardContext.setForwardParams(id == forwardNoQuoteItemId, id == forwardNoQuoteItemId);
-            if (NekoConfig.quickForward) {
-                forwardContext.openShareAlert(parent, null, () -> {
-                    selectedFiles.clear();
-                    showActionMode(false);
-                });
-                return;
-            }
-            Bundle args = new Bundle();
-            args.putBoolean("onlySelect", true);
-            args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
-            DialogsActivity fragment = new DialogsActivity(args);
-            fragment.forwardContext = forwardContext;
-            var forwardParams = fragment.forwardContext.getForwardParams();
-            fragment.setDelegate((fragment1, dids, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
-                selectedFiles.clear();
-
-                showActionMode(false);
-
-                if (dids.size() > 1 || dids.get(0).dialogId == AccountInstance.getInstance(currentAccount).getUserConfig().getClientUserId() || message != null) {
-                    for (int a = 0; a < dids.size(); a++) {
-                        long did = dids.get(a).dialogId;
-                        if (message != null) {
-                            AccountInstance.getInstance(currentAccount).getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(message.toString(), did, null, null, null, true, null, null, null, forwardParams.notify, forwardParams.scheduleDate, 0, null, false));
-                        }
-                        AccountInstance.getInstance(currentAccount).getSendMessagesHelper().sendMessage(fmessages, did, forwardParams.noQuote, forwardParams.noCaption, forwardParams.notify, forwardParams.scheduleDate, 0);
-                    }
-                    fragment1.finishFragment();
-                } else {
-                    long did = dids.get(0).dialogId;
-                    Bundle args1 = new Bundle();
-                    args1.putBoolean("forward_noquote", forwardParams.noQuote);
-                    args1.putBoolean("forward_nocaption", forwardParams.noCaption);
-                    args1.putBoolean("scrollToTopOnResume", true);
-                    if (DialogObject.isEncryptedDialog(did)) {
-                        args1.putInt("enc_id", DialogObject.getEncryptedChatId(did));
-                    } else {
-                        if (DialogObject.isUserDialog(did)) {
-                            args1.putLong("user_id", did);
-                        } else {
-                            args1.putLong("chat_id", -did);
-                        }
-                        if (!AccountInstance.getInstance(currentAccount).getMessagesController().checkCanOpenChat(args1, fragment1)) {
-                            return true;
-                        }
-                    }
-                    ChatActivity chatActivity = new ChatActivity(args1);
-                    fragment1.presentFragment(chatActivity, true);
-                    chatActivity.showFieldPanelForForward(true, fmessages);
-                }
-                return true;
-            });
-            parent.presentFragment(fragment);
+            onForwardAction(id, true);
         }
+    }
+
+    private void onForwardAction(int id, boolean rememberOption) {
+        if (rememberOption) {
+            ForwardItem.setLastForwardOption(id);
+        }
+        ArrayList<MessageObject> fmessages = new ArrayList<>(selectedFiles.values());
+        ForwardContext forwardContext = () -> fmessages;
+        forwardContext.setForwardParams(id == forwardNoQuoteItemId, id == forwardNoCaptionItemId);
+        if (NekoConfig.quickForward) {
+            forwardContext.openShareAlert(parent, null, () -> {
+                selectedFiles.clear();
+                showActionMode(false);
+            });
+            return;
+        }
+        Bundle args = new Bundle();
+        args.putBoolean("onlySelect", true);
+        args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
+        DialogsActivity fragment = new DialogsActivity(args);
+        fragment.forwardContext = forwardContext;
+        var forwardParams = fragment.forwardContext.getForwardParams();
+        fragment.setDelegate((fragment1, dids, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
+            selectedFiles.clear();
+
+            showActionMode(false);
+
+            if (dids.size() > 1 || dids.get(0).dialogId == AccountInstance.getInstance(currentAccount).getUserConfig().getClientUserId() || message != null) {
+                for (int a = 0; a < dids.size(); a++) {
+                    long did = dids.get(a).dialogId;
+                    if (message != null) {
+                        AccountInstance.getInstance(currentAccount).getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(message.toString(), did, null, null, null, true, null, null, null, forwardParams.notify, forwardParams.scheduleDate, 0, null, false));
+                    }
+                    AccountInstance.getInstance(currentAccount).getSendMessagesHelper().sendMessage(fmessages, did, forwardParams.noQuote, forwardParams.noCaption, forwardParams.notify, forwardParams.scheduleDate, 0);
+                }
+                fragment1.finishFragment();
+            } else {
+                long did = dids.get(0).dialogId;
+                Bundle args1 = new Bundle();
+                args1.putBoolean("forward_noquote", forwardParams.noQuote);
+                args1.putBoolean("forward_nocaption", forwardParams.noCaption);
+                args1.putBoolean("scrollToTopOnResume", true);
+                if (DialogObject.isEncryptedDialog(did)) {
+                    args1.putInt("enc_id", DialogObject.getEncryptedChatId(did));
+                } else {
+                    if (DialogObject.isUserDialog(did)) {
+                        args1.putLong("user_id", did);
+                    } else {
+                        args1.putLong("chat_id", -did);
+                    }
+                    if (!AccountInstance.getInstance(currentAccount).getMessagesController().checkCanOpenChat(args1, fragment1)) {
+                        return true;
+                    }
+                }
+                ChatActivity chatActivity = new ChatActivity(args1);
+                fragment1.presentFragment(chatActivity, true);
+                chatActivity.showFieldPanelForForward(true, fmessages);
+            }
+            return true;
+        });
+        parent.presentFragment(fragment);
     }
 
     @Override
@@ -1119,6 +1137,7 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
             if (gotoItem != null) {
                 gotoItem.setVisibility(selectedFiles.size() == 1 ? View.VISIBLE : View.GONE);
             }
+            updateForwardItems();
             if (speedItem != null) {
                 boolean visible = isSpeedItemVisible();
                 int v = visible ? View.VISIBLE : View.GONE;
@@ -1416,6 +1435,7 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
                 if (gotoItem != null) {
                     gotoItem.setVisibility(selectedFiles.size() == 1 ? View.VISIBLE : View.GONE);
                 }
+                updateForwardItems();
             }
         }
     }

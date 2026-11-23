@@ -378,6 +378,10 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
         canceledLoading = true;
     }
 
+    public boolean isCanceledLoading() {
+        return canceledLoading;
+    }
+
     public void setForceLoading(boolean value) {
         forceLoding = value;
     }
@@ -685,6 +689,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
                 return;
             }
         }
+        canceledLoading = false;
 
         ImageLocation strippedLoc;
         if (strippedLocation != null) {
@@ -990,6 +995,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
         currentCacheType = 0;
         currentAlpha = 1;
         previousAlpha = 1f;
+        canceledLoading = false;
 
         if (setImageBackup != null) {
             setImageBackup.clear();
@@ -2837,6 +2843,17 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
 
     public int getParam() {
         return param;
+    }
+
+    protected void onImageLoadFailed(String key, int type, int guid) {
+        if (key == null || currentGuid != guid) {
+            return;
+        }
+        if (type == TYPE_IMAGE && key.equals(currentImageKey) && currentImageDrawable == null
+                || type == TYPE_MEDIA && key.equals(currentMediaKey) && currentMediaDrawable == null
+                || type == TYPE_THUMB && key.equals(currentThumbKey) && currentThumbDrawable == null) {
+            canceledLoading = true;
+        }
     }
 
     protected boolean setImageBitmapByKey(Drawable drawable, String key, int type, boolean memCache, int guid) {

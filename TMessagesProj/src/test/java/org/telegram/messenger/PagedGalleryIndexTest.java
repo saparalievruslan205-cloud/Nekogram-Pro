@@ -403,6 +403,83 @@ public class PagedGalleryIndexTest {
         assertFalse(field(MediaController.class, "galleryLoadInProgress", Boolean.class));
     }
 
+    @Test
+    public void failedPageQueryDoesNotPoisonUnavailableAndCanRetry() throws Exception {
+        MediaController.PhotoEntry first = entry(10, false);
+        PagedGalleryIndex index = index(first);
+        field(index, "cache", LinkedHashMap.class).clear();
+        TestProvider provider = new TestProvider();
+        provider.failQuery = true;
+        ShadowContentResolver.registerProviderInternal("media", provider);
+
+        CountDownLatch failedAttempt = new CountDownLatch(1);
+        assertNull(index.getPhoto(index.getAllMedia(), 0, new PagedGalleryIndex.Listener() {
+            @Override public void onIndexReady(PagedGalleryIndex ready) { }
+            @Override public void onPageReady() { failedAttempt.countDown(); }
+        }));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (failedAttempt.getCount() > 0 && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle();
+            Thread.sleep(10);
+        }
+        assertEquals(0, failedAttempt.getCount());
+        assertTrue(field(index, "unavailable", HashSet.class).isEmpty());
+
+        provider.failQuery = false;
+        provider.cursor = new MatrixCursor(new String[]{"_id", "media_type", "bucket_id", "_data", "date_added", "datetaken", "orientation", "duration", "width", "height", "_size", "bucket_display_name", "volume_name"});
+        provider.cursor.addRow(new Object[]{10, 1, 7, "/media/10", 10, 0, 0, 0, 1, 1, 10, "Camera", "external_primary"});
+        CountDownLatch retryAttempt = new CountDownLatch(1);
+        assertNull(index.getPhoto(index.getAllMedia(), 0, new PagedGalleryIndex.Listener() {
+            @Override public void onIndexReady(PagedGalleryIndex ready) { }
+            @Override public void onPageReady() { retryAttempt.countDown(); }
+        }));
+        deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (retryAttempt.getCount() > 0 && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle();
+            Thread.sleep(10);
+        }
+        assertEquals(0, retryAttempt.getCount());
+        assertNotNull(index.getCachedPhoto(index.getAllMedia(), 0));
+    }
+
+    @Test
+    public void deferredPageRequestDrainsAutomaticallyWhenInFlightSlotFrees() throws Exception {
+        MediaController.PhotoEntry[] entries = new MediaController.PhotoEntry[320];
+        for (int i = 0; i < entries.length; i++) {
+            entries[i] = entry(1000 - i, i % 3 == 0);
+        }
+        PagedGalleryIndex index = index(entries);
+        field(index, "cache", LinkedHashMap.class).clear();
+        TestProvider provider = new TestProvider();
+        provider.entered = new CountDownLatch(4);
+        provider.release = new CountDownLatch(1);
+        provider.cursor = new MatrixCursor(new String[]{"_id", "media_type", "bucket_id", "_data", "date_added", "datetaken", "orientation", "duration", "width", "height", "_size", "bucket_display_name", "volume_name"});
+        ShadowContentResolver.registerProviderInternal("media", provider);
+
+        for (int page = 0; page < 4; page++) {
+            index.getPhoto(index.getAllMedia(), page * 64, null);
+        }
+        assertTrue(provider.entered.await(5, TimeUnit.SECONDS));
+
+        CountDownLatch fifthPageReady = new CountDownLatch(1);
+        index.getPhoto(index.getAllMedia(), 4 * 64, new PagedGalleryIndex.Listener() {
+            @Override public void onIndexReady(PagedGalleryIndex ready) { }
+            @Override public void onPageReady() { fifthPageReady.countDown(); }
+        });
+        assertEquals(1, field(index, "deferredPages", LinkedHashMap.class).size());
+
+        provider.entered = null;
+        provider.release.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (fifthPageReady.getCount() > 0 && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle();
+            Thread.sleep(10);
+        }
+        assertEquals(0, fifthPageReady.getCount());
+        assertEquals(5, provider.queries.get());
+        assertTrue(field(index, "deferredPages", LinkedHashMap.class).isEmpty());
+    }
+
     private static Uri uri(int id) {
         return Uri.parse("content://media/external/images/media/" + id);
     }

@@ -1335,6 +1335,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     private boolean mediaSizeBadgeDownloading;
     private final RectF mediaSizeBadgeRect = new RectF();
     private boolean nativeMediaSizeBadgeDrawn;
+    private boolean nativeMediaDurationDrawn;
     private float nativeMediaInfoBottom;
     private final Paint mediaSizeBadgeBackgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint mediaSizeBadgeTextPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
@@ -13461,6 +13462,28 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
+    public boolean hasUnrevealedMediaSpoiler() {
+        return tw.nekomimi.nekogram.helpers.SelectionMediaGestureController.hasUnrevealedMediaSpoiler(currentMessageObject);
+    }
+
+    public boolean canRevealMediaSpoiler() {
+        return hasUnrevealedMediaSpoiler() && mediaSpoilerRevealProgress == 0f;
+    }
+
+    public boolean isTouchInsidePhotoImage(float x, float y) {
+        return drawPhotoImage && photoImage != null && photoImage.isInsideImage(x, y);
+    }
+
+    public boolean isTouchInsidePreviewableMedia(float x, float y) {
+        if (currentMessageObject == null) {
+            return false;
+        }
+        if (isTouchInsidePhotoImage(x, y)) {
+            return true;
+        }
+        return TextUtils.isEmpty(currentMessageObject.caption) && isInsideBackground(x, y);
+    }
+
     public void startRevealMedia() {
         startRevealMedia(
             photoImage.getImageX() + photoImage.getImageWidth() / 2f,
@@ -22472,6 +22495,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         closeExplanationX = -1;
         closeExplanationY = -1;
         nativeMediaSizeBadgeDrawn = false;
+        nativeMediaDurationDrawn = false;
         nativeMediaInfoBottom = photoImage.getImageY();
 
         if (currentMessageObject.hadAnimationNotReadyLoading && photoImage.getVisible() && !currentMessageObject.needDrawBluredPreview() && (documentAttachType == DOCUMENT_ATTACH_TYPE_ROUND || documentAttachType == DOCUMENT_ATTACH_TYPE_VIDEO || documentAttachType == DOCUMENT_ATTACH_TYPE_GIF)) {
@@ -22605,6 +22629,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                 nativeMediaInfoBottom = rect.bottom;
                                 nativeMediaSizeBadgeDrawn = drawDocTitleLayout
                                         || drawLoadingProgress && loadingProgressLayout != null;
+                                nativeMediaDurationDrawn = infoLayout != null
+                                        && (!drawLoadingProgress || drawDocTitleLayout);
                             }
                             int[] rad = photoImage.getRoundRadius();
                             int r = Math.min(dp(8), Math.max(rad[0], rad[1]));
@@ -24330,6 +24356,30 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         return 0;
     }
 
+    @Nullable
+    private String getMediaSizeBadgeDurationText() {
+        if (currentMessageObject == null || currentMessageObject.needDrawBluredPreview()) {
+            return null;
+        }
+        TLRPC.Document document = currentMessageObject.getDocument();
+        boolean isGif = MessageObject.isGifDocument(document, currentMessageObject.hasValidGroupId());
+        boolean isVideo = MessageObject.isVideoDocument(document);
+        if (!MediaSizeBadgePolicy.shouldIncludeVideoDuration(isVideo, isGif, nativeMediaDurationDrawn)) {
+            return null;
+        }
+        double duration = currentMessageObject.getDuration();
+        if (duration <= 0) {
+            AnimatedFileDrawable animation = photoImage.getAnimation();
+            if (animation != null && animation.getDurationMs() > 0) {
+                duration = animation.getDurationMs() / 1000.0;
+            }
+        }
+        if (duration <= 0) {
+            return null;
+        }
+        return AndroidUtilities.formatShortDuration((int) duration);
+    }
+
     private void drawMediaSizeBadge(Canvas canvas) {
         if (!isMediaSizeBadgeSupported() || !shouldDrawMediaSizeBadge() || !drawPhotoImage || !photoImage.getVisible() || photoImage.getImageWidth() <= dp(16) || photoImage.getImageHeight() <= dp(14)) {
             return;
@@ -24348,8 +24398,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     ? String.format(Locale.US, "%s / %s · %d%%", AndroidUtilities.formatFileSize(loadedSize), AndroidUtilities.formatFileSize(totalSize), (int) Math.min(100, loadedSize * 100.0 / totalSize))
                     : AndroidUtilities.formatFileSize(loadedSize);
             drawMediaSizeBadgeText(canvas, progress);
-        } else if (totalSize > 0) {
-            drawMediaSizeBadgeText(canvas, AndroidUtilities.formatFileSize(totalSize));
+        } else {
+            String sizeText = totalSize > 0 ? AndroidUtilities.formatFileSize(totalSize) : null;
+            String badgeText = MediaSizeBadgePolicy.formatBadgeText(getMediaSizeBadgeDurationText(), sizeText);
+            if (badgeText != null) {
+                drawMediaSizeBadgeText(canvas, badgeText);
+            }
         }
     }
 
@@ -24366,17 +24420,17 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         float availableTextWidth = Math.max(1, imageWidth - horizontalInset * 2 - paddingX * 2);
         float preferredTop = Math.max(photoImage.getImageY() + verticalInset, nativeMediaInfoBottom + dp(4));
         float availableHeight = photoImage.getImageY2() - verticalInset - preferredTop;
-        int separator = text.indexOf(" / ");
+        String[] twoLines = MediaSizeBadgePolicy.splitTwoLineBadgeText(text);
         float lineHeight = dp(12);
         float twoLineHeight = dp(32);
-        boolean wrapProgress = separator >= 0 && MediaSizeBadgePolicy.getProgressLineCount(
+        boolean wrapTwoLines = twoLines != null && MediaSizeBadgePolicy.getProgressLineCount(
                 mediaSizeBadgeTextPaint.measureText(text), availableTextWidth, twoLineHeight, availableHeight) == 2;
         CharSequence firstLine = text;
         CharSequence secondLine = null;
-        if (wrapProgress) {
+        if (wrapTwoLines) {
             height = twoLineHeight;
-            firstLine = text.substring(0, separator + 2);
-            secondLine = text.substring(separator + 3);
+            firstLine = twoLines[0];
+            secondLine = twoLines[1];
             float widestLine = Math.max(mediaSizeBadgeTextPaint.measureText(firstLine, 0, firstLine.length()),
                     mediaSizeBadgeTextPaint.measureText(secondLine, 0, secondLine.length()));
             if (widestLine > availableTextWidth) {

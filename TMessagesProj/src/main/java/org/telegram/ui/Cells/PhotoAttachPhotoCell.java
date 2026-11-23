@@ -26,6 +26,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Region;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.SpannableString;
@@ -542,22 +543,7 @@ public class PhotoAttachPhotoCell extends FrameLayout {
             videoPlayImageView.setVisibility(GONE);
             videoInfoContainer.setVisibility(INVISIBLE);
         }
-        if (photoEntry.coverPath != null) {
-            imageView.setImage(photoEntry.coverPath, null, Theme.chat_attachEmptyDrawable);
-        } else if (photoEntry.thumbPath != null) {
-            imageView.setImage(photoEntry.thumbPath, null, Theme.chat_attachEmptyDrawable);
-        } else if (photoEntry.path != null) {
-            if (photoEntry.mediaStoreUri != null) {
-                imageView.setImage(ImageLocation.getForMediaStore(photoEntry.mediaStoreUri, photoEntry.imageId, photoEntry.path, photoEntry.isVideo && !photoEntry.isLivePhoto()), null, Theme.chat_attachEmptyDrawable, null);
-            } else if (photoEntry.isVideo && !photoEntry.isLivePhoto()) {
-                imageView.setImage("vthumb://" + photoEntry.imageId + ":" + photoEntry.path, null, Theme.chat_attachEmptyDrawable);
-            } else {
-                imageView.setOrientation(photoEntry.orientation, photoEntry.invert, true);
-                imageView.setImage("thumb://" + photoEntry.imageId + ":" + photoEntry.path, null, Theme.chat_attachEmptyDrawable);
-            }
-        } else {
-            imageView.setImageDrawable(Theme.chat_attachEmptyDrawable);
-        }
+        bindPhotoEntryImage(photoEntry);
         boolean showing = needCheckShow && PhotoViewer.isShowingImage(photoEntry.path);
         imageView.getImageReceiver().setVisible(!showing, true);
         checkBox.setAlpha(showing ? 0.0f : 1.0f);
@@ -566,6 +552,49 @@ public class PhotoAttachPhotoCell extends FrameLayout {
         setHasSpoiler(entry.hasSpoiler);
         setHighQuality(entry.isHighQuality() && isChecked());
         setStarsPrice(entry.starsAmount, selectedMultiple);
+    }
+
+    private void bindPhotoEntryImage(MediaController.PhotoEntry entry) {
+        if (entry == null) {
+            imageView.setImageDrawable(Theme.chat_attachEmptyDrawable);
+            return;
+        }
+        if (entry.coverPath != null) {
+            imageView.setOrientation(0, true);
+            imageView.setImage(entry.coverPath, null, Theme.chat_attachEmptyDrawable);
+        } else if (entry.thumbPath != null) {
+            imageView.setOrientation(0, true);
+            imageView.setImage(entry.thumbPath, null, Theme.chat_attachEmptyDrawable);
+        } else if (entry.path != null) {
+            boolean isVideo = entry.isVideo && !entry.isLivePhoto();
+            if (entry.mediaStoreUri != null) {
+                if (isVideo || Build.VERSION.SDK_INT >= 29) {
+                    imageView.setOrientation(0, true);
+                } else {
+                    imageView.setOrientation(entry.orientation, entry.invert, true);
+                }
+                imageView.setImage(ImageLocation.getForMediaStore(entry.mediaStoreUri, entry.imageId, entry.path, isVideo), null, Theme.chat_attachEmptyDrawable, null);
+            } else if (isVideo) {
+                imageView.setOrientation(0, true);
+                imageView.setImage("vthumb://" + entry.imageId + ":" + entry.path, null, Theme.chat_attachEmptyDrawable);
+            } else {
+                imageView.setOrientation(entry.orientation, entry.invert, true);
+                imageView.setImage("thumb://" + entry.imageId + ":" + entry.path, null, Theme.chat_attachEmptyDrawable);
+            }
+        } else {
+            imageView.setImageDrawable(Theme.chat_attachEmptyDrawable);
+        }
+    }
+
+    public void reloadThumbnailIfMissing() {
+        if (photoEntry == null || imageView == null) {
+            return;
+        }
+        ImageReceiver receiver = imageView.getImageReceiver();
+        if (receiver == null || receiver.hasNotThumb() || !receiver.isCanceledLoading()) {
+            return;
+        }
+        bindPhotoEntryImage(photoEntry);
     }
 
     public void setPhotoEntry(MediaController.SearchImage searchImage, boolean needCheckShow, boolean last) {

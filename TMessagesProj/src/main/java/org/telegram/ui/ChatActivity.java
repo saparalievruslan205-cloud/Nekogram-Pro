@@ -362,6 +362,7 @@ import tw.nekomimi.nekogram.MessageDetailsActivity;
 import tw.nekomimi.nekogram.NekoConfig;
 import tw.nekomimi.nekogram.helpers.MessageHelper;
 import tw.nekomimi.nekogram.helpers.QrHelper;
+import tw.nekomimi.nekogram.helpers.SelectionMediaGestureController;
 import tw.nekomimi.nekogram.helpers.EmojiHelper;
 import tw.nekomimi.nekogram.streaming.MediaStreamingProvider;
 import tw.nekomimi.nekogram.tlv.TlViewer;
@@ -1803,6 +1804,15 @@ public class ChatActivity extends BaseFragment implements
             if (!actionBar.isActionModeShowed() && (!isReport() || showMenu)) {
                 result = createMenu(view, false, true, x, y, true);
             } else {
+                if (actionBar.isActionModeShowed() && !isReport() && view instanceof ChatMessageCell) {
+                    ChatMessageCell cell = (ChatMessageCell) view;
+                    MessageObject messageObject = cell.getMessageObject();
+                    if (SelectionMediaGestureController.isPreviewableChatMedia(messageObject)
+                            && cell.isTouchInsidePreviewableMedia(x, y)) {
+                        startMultiselect(position, true, cell, x, y);
+                        return true;
+                    }
+                }
                 boolean outside = false;
                 if (view instanceof ChatMessageCell) {
                     outside = !((ChatMessageCell) view).isInsideBackground(x, y);
@@ -1816,6 +1826,40 @@ public class ChatActivity extends BaseFragment implements
             return result;
         }
     };
+
+    private final SelectionMediaGestureController selectionMediaGestureController = new SelectionMediaGestureController();
+
+    private void openSelectedMediaPreview(ChatMessageCell cell, float x, float y) {
+        if (cell == null || isFinished || finishing || getParentActivity() == null) {
+            return;
+        }
+        MessageObject message = cell.getMessageObject();
+        if (!SelectionMediaGestureController.isPreviewableChatMedia(message)) {
+            return;
+        }
+        if (cell.hasUnrevealedMediaSpoiler()) {
+            if (cell.canRevealMediaSpoiler()) {
+                if (message.isSensitive()) {
+                    getChatMessageCellDelegate().didPressRevealSensitiveContent(cell);
+                } else {
+                    cell.startRevealMedia(x, y);
+                }
+            }
+            return;
+        }
+        if (message.isVideo()) {
+            if (DownloadController.getInstance(currentAccount).canDownloadMedia(message.messageOwner) == 1) {
+                message.putInDownloadsStore = true;
+            }
+        } else {
+            message.putInDownloadsStore = true;
+        }
+        if (message.getDuration() > 0 && message.getVideoStartsTimestamp() > 0 && !message.openedInViewer) {
+            final int timestamp = message.getVideoStartsTimestamp();
+            message.forceSeekTo = (float) (timestamp / message.getDuration());
+        }
+        openPhotoViewerForMessage(cell, message);
+    }
 
     public ChatActionCell findWalletSendLanding(TL_wallet.walletTransaction transaction) {
         if (chatListView == null || chatAdapter == null) return null;
@@ -1842,6 +1886,10 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void startMultiselect(int position) {
+        startMultiselect(position, false, null, 0f, 0f);
+    }
+
+    private void startMultiselect(int position, boolean deferredAnchor, @Nullable ChatMessageCell anchorCell, float anchorX, float anchorY) {
         if (isInsideContainer) {
             return;
         }
@@ -1850,7 +1898,8 @@ public class ChatActivity extends BaseFragment implements
             return;
         }
         MessageObject messageObject = messages.get(indexOfMessage);
-        final boolean unselect = selectedMessagesIds[0].get(messageObject.getId(), null) == null && selectedMessagesIds[1].get(messageObject.getId(), null) == null;
+        final boolean isCurrentlySelected = selectedMessagesIds[0].get(messageObject.getId(), null) != null || selectedMessagesIds[1].get(messageObject.getId(), null) != null;
+        final boolean unselect = deferredAnchor ? isCurrentlySelected : !isCurrentlySelected;
         SparseArray<MessageObject> alreadySelectedMessagesIds = new SparseArray<>();
         for (int i = 0; i < selectedMessagesIds[0].size(); i++) {
             alreadySelectedMessagesIds.put(selectedMessagesIds[0].keyAt(i), selectedMessagesIds[0].valueAt(i));
@@ -1858,10 +1907,37 @@ public class ChatActivity extends BaseFragment implements
         for (int i = 0; i < selectedMessagesIds[1].size(); i++) {
             alreadySelectedMessagesIds.put(selectedMessagesIds[1].keyAt(i), selectedMessagesIds[1].valueAt(i));
         }
+        if (deferredAnchor) {
+            selectionMediaGestureController.arm(() -> {
+                if (chatListView != null) {
+                    chatListView.cancelMultiselect();
+                }
+                if (anchorCell != null) {
+                    try {
+                        anchorCell.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    } catch (Exception ignored) {
+                    }
+                }
+                openSelectedMediaPreview(anchorCell, anchorX, anchorY);
+            }, () -> {
+                if (anchorCell != null && anchorCell.getMessageObject() == messageObject) {
+                    processRowSelect(anchorCell, false, anchorX, anchorY);
+                } else {
+                    addToSelectedMessages(messageObject, false);
+                    updateActionModeTitle();
+                    updateVisibleRows();
+                }
+            });
+        } else {
+            selectionMediaGestureController.cancel();
+        }
         chatListView.startMultiselect(position, false, new RecyclerListView.onMultiSelectionChanged() {
             boolean limitReached;
             @Override
             public void onSelectionChanged(int position, boolean selected, float x, float y) {
+                if (unselect && actionBar != null && !actionBar.isActionModeShowed() && !isReport()) {
+                    return;
+                }
                 int i = position - chatAdapter.messagesStartRow;
                 if (unselect) {
                     selected = !selected;
@@ -1940,6 +2016,25 @@ public class ChatActivity extends BaseFragment implements
             public void scrollBy(int dy) {
                 chatListView.scrollBy(0, dy);
             }
+
+            @Override
+            public boolean allowHorizontalDrag() {
+                return deferredAnchor || (actionBar != null && actionBar.isActionModeShowed());
+            }
+
+            @Override
+            public void onMultiselectDragStarted() {
+                if (deferredAnchor) {
+                    selectionMediaGestureController.onDragStarted();
+                }
+            }
+
+            @Override
+            public void onMultiselectEnded(boolean dragStarted, boolean canceled) {
+                if (deferredAnchor) {
+                    selectionMediaGestureController.onGestureEnded(dragStarted, canceled);
+                }
+            }
         });
     }
 
@@ -1991,10 +2086,22 @@ public class ChatActivity extends BaseFragment implements
             if (actionBar.isActionModeShowed() || isReport()) {
                 boolean outside = false;
                 if (view instanceof ChatMessageCell) {
-                    if (textSelectionHelper.isSelected(((ChatMessageCell) view).getMessageObject())) {
+                    ChatMessageCell cell = (ChatMessageCell) view;
+                    MessageObject messageObject = cell.getMessageObject();
+                    if (textSelectionHelper.isSelected(messageObject)) {
                         return;
                     }
-                    outside = !((ChatMessageCell) view).isInsideBackground(x, y);
+                    if (cell.hasUnrevealedMediaSpoiler() && cell.isTouchInsidePreviewableMedia(x, y)) {
+                        if (cell.canRevealMediaSpoiler()) {
+                            if (messageObject != null && messageObject.isSensitive()) {
+                                getChatMessageCellDelegate().didPressRevealSensitiveContent(cell);
+                            } else {
+                                cell.startRevealMedia(x, y);
+                            }
+                        }
+                        return;
+                    }
+                    outside = !cell.isInsideBackground(x, y);
                 }
                 processRowSelect(view, outside, x, y);
                 return;
@@ -3502,6 +3609,7 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onFragmentDestroy() {
+        selectionMediaGestureController.cancel();
         pendingGallerySaveMessages = null;
         super.onFragmentDestroy();
         if (messageMetricsView != null) {
@@ -20743,7 +20851,22 @@ public class ChatActivity extends BaseFragment implements
                     forwardItem.setBlurredBackgroundFactory(scrimBlur3Factory, BlurredBackgroundProviderImpl.messageMenuBackground(resourceProvider));
                 }
                 if (forwardNoQuoteItem != null) {
-                    forwardNoQuoteItem.setIcon(new ForwardDrawable(ForwardItem.ID_FORWARD_NOQUOTE, false));
+                    ForwardItem.setupNoQuoteForwardItem(forwardNoQuoteItem, hasCaption, themeDelegate, id -> {
+                        setForwardParams(id == ForwardItem.ID_FORWARD_NOQUOTE, id == ForwardItem.ID_FORWARD_NOCAPTION);
+                        openForward(true);
+                    });
+                    forwardNoQuoteItem.setSubMenuDelegate(new ActionBarMenuItem.ActionBarSubMenuItemDelegate() {
+                        @Override
+                        public void onShowSubMenu() {
+                            updateScrimSourceBitmap();
+                        }
+
+                        @Override
+                        public void onHideSubMenu() {
+
+                        }
+                    });
+                    forwardNoQuoteItem.setBlurredBackgroundFactory(scrimBlur3Factory, BlurredBackgroundProviderImpl.messageMenuBackground(resourceProvider));
                 }
                 ActionBarMenuItem tagItem = actionBar.createActionMode().getItem(tag_message);
                 ActionBarMenuItem shareItem = actionBar.createActionMode().getItem(share);
@@ -20805,7 +20928,7 @@ public class ChatActivity extends BaseFragment implements
                         }
                     }
                     if (forwardNoQuoteItem != null) {
-                        forwardNoQuoteItem.setEnabled(cantForwardMessagesCount == 0);
+                        forwardNoQuoteItem.setEnabled(cantForwardMessagesCount == 0 || noforwards);
                         forwardNoQuoteItem.setAlpha(cantForwardMessagesCount == 0 ? 1.0f : 0.5f);
                     }
                     if (actionsButtonsLayout != null) {
@@ -31702,6 +31825,7 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onPause() {
+        selectionMediaGestureController.cancel();
         super.onPause();
         scrolling = false;
         if (scrimPopupWindow != null) {
@@ -32366,6 +32490,10 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void hideActionMode() {
+        selectionMediaGestureController.cancel();
+        if (chatListView != null && chatListView.isMultiselect()) {
+            chatListView.cancelMultiselect();
+        }
         if (actionBar != null) {
             if (!actionBar.isActionModeShowed()) {
                 return;
@@ -33625,6 +33753,7 @@ public class ChatActivity extends BaseFragment implements
                 }
                 scrimPopupWindowItems = new ActionBarMenuSubItem[items.size()];
                 scrimPopupRedItem = null;
+                int forwardSwipeBackIndex = -1;
                 for (int a = 0, N = items.size(); a < N; a++) {
                     final Integer option = options.get(a);
                     if (option == OPTION_DELETE && showWelcomeMessageRevertOption(selectedObject)) {
@@ -33719,17 +33848,18 @@ public class ChatActivity extends BaseFragment implements
                             }
                         }, waitForQr, onQrDetectionDone);
                     }
-                    if (option == OPTION_FORWARD || (option == OPTION_FORWARD_NOQUOTE && !NekoConfig.showNoQuoteForward) || option == OPTION_FORWARD_NOCAPTION) {
-                        var forwardPopupWrapper = new ForwardPopupWrapper(this, selectedObject, selectedObjectGroup, popupLayout.getSwipeBack(), this::processSelectedOption, getResourceProvider());
-                        int swipeBackIndex = popupLayout.addViewToSwipeBack(forwardPopupWrapper.windowLayout);
+                    if (option == OPTION_FORWARD || option == OPTION_FORWARD_NOQUOTE || option == OPTION_FORWARD_NOCAPTION) {
+                        if (forwardSwipeBackIndex < 0) {
+                            var forwardPopupWrapper = new ForwardPopupWrapper(this, selectedObject, selectedObjectGroup, popupLayout.getSwipeBack(), this::processSelectedOption, getResourceProvider());
+                            forwardSwipeBackIndex = popupLayout.addViewToSwipeBack(forwardPopupWrapper.windowLayout);
+                        }
+                        final int swipeBackIndex = forwardSwipeBackIndex;
                         cell.setIcon(new ForwardDrawable(option, false));
                         cell.setRightIcon(R.drawable.msg_arrowright, v12 -> popupLayout.getSwipeBack().openForeground(swipeBackIndex));
                         cell.setOnLongClickListener(view -> {
                             popupLayout.getSwipeBack().openForeground(swipeBackIndex);
                             return true;
                         });
-                    } else if (option == OPTION_FORWARD_NOQUOTE) {
-                        cell.setIcon(new ForwardDrawable(option, false));
                     }
                     if (option == OPTION_TRANSLATE) {
                         MessageObject messageObject = getMessageHelper().getMessageForTranslate(selectedObject, selectedObjectGroup);
@@ -48354,8 +48484,8 @@ public class ChatActivity extends BaseFragment implements
                     options.add(ForwardItem.getLastForwardOption(hasCaption));
                     icons.add(R.drawable.msg_forward);
                     if (NekoConfig.showNoQuoteForward) {
-                        items.add(LocaleController.getString(R.string.NoQuoteForwardShort));
-                        options.add(OPTION_FORWARD_NOQUOTE);
+                        items.add(ForwardItem.getNoQuoteForwardOptionTitle(hasCaption, true));
+                        options.add(ForwardItem.getNoQuoteForwardOption(hasCaption));
                         icons.add(R.drawable.msg_forward);
                     }
                     if (NekoConfig.showSetReminder) {

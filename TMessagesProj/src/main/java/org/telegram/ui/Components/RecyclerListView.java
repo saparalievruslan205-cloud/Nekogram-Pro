@@ -208,6 +208,7 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
     boolean multiselectScrollToTop;
     float lastX = Float.MAX_VALUE;
     float lastY = Float.MAX_VALUE;
+    float lastMultiselectX = Float.MAX_VALUE;
     int[] listPaddings;
     HashSet<Integer> selectedPositions;
     RecyclerItemsEnterAnimator itemsEnterAnimator;
@@ -2959,9 +2960,24 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
 
             this.multiSelectionListener = multiSelectionListener;
             multiSelectionGesture = true;
+            multiSelectionGestureStarted = false;
+            lastX = Float.MAX_VALUE;
+            lastY = Float.MAX_VALUE;
+            lastMultiselectX = Float.MAX_VALUE;
             startSelectionFrom = currentSelectedPosition = positionFrom;
         }
         this.useRelativePositions = useRelativePositions;
+    }
+
+    public void cancelMultiselect() {
+        lastX = Float.MAX_VALUE;
+        lastY = Float.MAX_VALUE;
+        lastMultiselectX = Float.MAX_VALUE;
+        multiSelectionGesture = false;
+        multiSelectionGestureStarted = false;
+        multiSelectionListener = null;
+        requestDisallowInterceptTouchEvent(this, false);
+        cancelMultiselectScroll();
     }
 
 
@@ -2970,16 +2986,29 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
         if (fastScroll != null && fastScroll.pressed) {
             return false;
         }
-        if (multiSelectionGesture && e.getAction() != MotionEvent.ACTION_DOWN && e.getAction() != MotionEvent.ACTION_UP && e.getAction() != MotionEvent.ACTION_CANCEL) {
+        int action = e.getActionMasked();
+        if (multiSelectionGesture && action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL) {
             if (lastX == Float.MAX_VALUE && lastY == Float.MAX_VALUE) {
                 lastX = e.getX();
                 lastY = e.getY();
             }
-            if (!multiSelectionGestureStarted && Math.abs(e.getY() - lastY) > touchSlop) {
-                multiSelectionGestureStarted = true;
-                requestDisallowInterceptTouchEvent(this, true);
+            boolean allowHorizontalDrag = multiSelectionListener != null && multiSelectionListener.allowHorizontalDrag();
+            if (!multiSelectionGestureStarted) {
+                float dx = Math.abs(e.getX() - lastX);
+                float dy = Math.abs(e.getY() - lastY);
+                boolean passedSlop = allowHorizontalDrag
+                        ? Math.hypot(dx, dy) > touchSlop
+                        : dy > touchSlop;
+                if (passedSlop) {
+                    multiSelectionGestureStarted = true;
+                    requestDisallowInterceptTouchEvent(this, true);
+                    if (multiSelectionListener != null) {
+                        multiSelectionListener.onMultiselectDragStarted();
+                    }
+                }
             }
-            if (multiSelectionGestureStarted) {
+            if (multiSelectionGesture && multiSelectionGestureStarted && multiSelectionListener != null) {
+                lastMultiselectX = e.getX();
                 chekMultiselect(e.getX(), e.getY());
                 multiSelectionListener.getPaddings(listPaddings);
                 if (e.getY() > getMeasuredHeight() - AndroidUtilities.dp(56) - listPaddings[1] && !(currentSelectedPosition < startSelectionFrom && multiSelectionListener.limitReached())) {
@@ -2992,18 +3021,32 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
             }
             return true;
         }
+        boolean wasMultiSelection = multiSelectionGesture;
+        boolean wasDragStarted = multiSelectionGestureStarted;
+        onMultiSelectionChanged endedListener = multiSelectionListener;
         lastX = Float.MAX_VALUE;
         lastY = Float.MAX_VALUE;
+        lastMultiselectX = Float.MAX_VALUE;
         multiSelectionGesture = false;
         multiSelectionGestureStarted = false;
+        multiSelectionListener = null;
         requestDisallowInterceptTouchEvent(this, false);
         cancelMultiselectScroll();
+        if (wasMultiSelection && endedListener != null) {
+            endedListener.onMultiselectEnded(wasDragStarted, action == MotionEvent.ACTION_CANCEL);
+        }
         return super.onTouchEvent(e);
     }
 
     private boolean chekMultiselect(float x, float y) {
-        y = Math.min(getMeasuredHeight() - listPaddings[1], Math.max(y, listPaddings[0]));
-        x = Math.min(getMeasuredWidth(), Math.max(x, 0));
+        if (multiSelectionListener == null) {
+            return false;
+        }
+        multiSelectionListener.getPaddings(listPaddings);
+        float maxY = Math.max(listPaddings[0], getMeasuredHeight() - listPaddings[1] - 1);
+        float maxX = Math.max(0, getMeasuredWidth() - 1);
+        y = Math.min(maxY, Math.max(y, listPaddings[0]));
+        x = Math.min(maxX, Math.max(x, 0));
         for (int i = 0; i < getChildCount(); i++) {
             multiSelectionListener.getPaddings(listPaddings);
             if (useRelativePositions) {
@@ -3014,17 +3057,55 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
 
                 if (AndroidUtilities.rectTmp.contains(x, y)) {
                     int position = getChildLayoutPosition(child);
+                    if (position == NO_POSITION) {
+                        continue;
+                    }
 
                     if (currentSelectedPosition != position) {
                         boolean selectionFromTop = currentSelectedPosition > startSelectionFrom || position > startSelectionFrom;
                         position = multiSelectionListener.checkPosition(position, selectionFromTop);
 
-                        if (selectionFromTop) {
+                        if (currentSelectedPosition > startSelectionFrom && position < startSelectionFrom) {
+                            for (int k = currentSelectedPosition; k > startSelectionFrom; k--) {
+                                if (multiSelectionListener.canSelect(k)) {
+                                    multiSelectionListener.onSelectionChanged(k, false, x, y);
+                                }
+                            }
+                            if (!multiSelectionListener.limitReached()) {
+                                for (int k = startSelectionFrom - 1; k >= position; k--) {
+                                    if (multiSelectionListener.limitReached()) {
+                                        break;
+                                    }
+                                    if (multiSelectionListener.canSelect(k)) {
+                                        multiSelectionListener.onSelectionChanged(k, true, x, y);
+                                    }
+                                }
+                            }
+                        } else if (currentSelectedPosition < startSelectionFrom && position > startSelectionFrom) {
+                            for (int k = currentSelectedPosition; k < startSelectionFrom; k++) {
+                                if (multiSelectionListener.canSelect(k)) {
+                                    multiSelectionListener.onSelectionChanged(k, false, x, y);
+                                }
+                            }
+                            if (!multiSelectionListener.limitReached()) {
+                                for (int k = startSelectionFrom + 1; k <= position; k++) {
+                                    if (multiSelectionListener.limitReached()) {
+                                        break;
+                                    }
+                                    if (multiSelectionListener.canSelect(k)) {
+                                        multiSelectionListener.onSelectionChanged(k, true, x, y);
+                                    }
+                                }
+                            }
+                        } else if (selectionFromTop) {
                             if (position > currentSelectedPosition) {
                                 if (!multiSelectionListener.limitReached()) {
                                     for (int k = currentSelectedPosition + 1; k <= position; k++) {
                                         if (k == startSelectionFrom) {
                                             continue;
+                                        }
+                                        if (multiSelectionListener.limitReached()) {
+                                            break;
                                         }
                                         if (multiSelectionListener.canSelect(k)) {
                                             multiSelectionListener.onSelectionChanged(k, true, x, y);
@@ -3057,6 +3138,9 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
                                         if (k == startSelectionFrom) {
                                             continue;
                                         }
+                                        if (multiSelectionListener.limitReached()) {
+                                            break;
+                                        }
                                         if (multiSelectionListener.canSelect(k)) {
                                             multiSelectionListener.onSelectionChanged(k, true, x, y);
                                         }
@@ -3084,14 +3168,19 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
     Runnable scroller = new Runnable() {
         @Override
         public void run() {
+            if (!multiSelectionGesture || multiSelectionListener == null) {
+                cancelMultiselectScroll();
+                return;
+            }
             int dy;
             multiSelectionListener.getPaddings(listPaddings);
+            float probeX = lastMultiselectX == Float.MAX_VALUE ? 0 : lastMultiselectX;
             if (multiselectScrollToTop) {
                 dy = -AndroidUtilities.dp(12f);
-                chekMultiselect(0, listPaddings[0]);
+                chekMultiselect(probeX, listPaddings[0]);
             } else {
                 dy = AndroidUtilities.dp(12f);
-                chekMultiselect(0, getMeasuredHeight() - listPaddings[1]);
+                chekMultiselect(probeX, getMeasuredHeight() - listPaddings[1]);
             }
             multiSelectionListener.scrollBy(dy);
             if (multiselectScrollRunning) {
@@ -3134,6 +3223,13 @@ public class RecyclerListView extends RecyclerView implements IBlur3Capture {
         boolean limitReached();
         void getPaddings(int paddings[]);
         void scrollBy(int dy);
+        default boolean allowHorizontalDrag() {
+            return false;
+        }
+        default void onMultiselectDragStarted() {
+        }
+        default void onMultiselectEnded(boolean dragStarted, boolean canceled) {
+        }
     }
 
     public void setItemsEnterAnimator(RecyclerItemsEnterAnimator itemsEnterAnimator) {

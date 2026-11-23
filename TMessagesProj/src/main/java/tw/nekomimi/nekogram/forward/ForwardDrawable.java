@@ -17,9 +17,13 @@ import org.telegram.ui.Components.RLottieDrawable;
 public class ForwardDrawable extends Drawable {
 
     private final Drawable drawable;
+    private final int type;
+    private final boolean share;
 
     public ForwardDrawable(int type, boolean share) {
         super();
+        this.type = type;
+        this.share = share;
 
         if (type == ForwardItem.ID_FORWARD) {
             drawable = ApplicationLoader.applicationContext.getResources().getDrawable(
@@ -34,6 +38,10 @@ public class ForwardDrawable extends Drawable {
             drawable.setAutoRepeat(0);
             this.drawable = drawable;
         }
+    }
+
+    public boolean matches(int type, boolean share) {
+        return this.type == type && this.share == share;
     }
 
     @Override

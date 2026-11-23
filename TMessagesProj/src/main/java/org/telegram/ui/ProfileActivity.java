@@ -4132,6 +4132,9 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             @Override
             public boolean onInterceptTouchEvent(MotionEvent e) {
                 if (sharedMediaLayout != null) {
+                    if (sharedMediaLayout.isMultiselect()) {
+                        return false;
+                    }
                     if (sharedMediaLayout.canEditStories() && sharedMediaLayout.isActionModeShown() && sharedMediaLayout.getClosestTab() == SharedMediaLayout.TAB_BOT_PREVIEWS) {
                         return false;
                     }

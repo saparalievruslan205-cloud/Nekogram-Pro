@@ -2,8 +2,10 @@ package tw.nekomimi.nekogram.helpers;
 
 import org.junit.Test;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class MediaSizeBadgePolicyTest {
@@ -68,5 +70,54 @@ public class MediaSizeBadgePolicyTest {
     @Test
     public void excludesNonVideoDocuments() {
         assertFalse(MediaSizeBadgePolicy.shouldDrawCustomMediaSizeBadge(false, false, false));
+    }
+
+    @Test
+    public void includesDurationForAlbumVideoWhenNativeDurationOverlayIsHidden() {
+        assertTrue(MediaSizeBadgePolicy.shouldIncludeVideoDuration(true, false, false));
+    }
+
+    @Test
+    public void omitsDurationWhenNativeDurationOverlayIsAlreadyDrawn() {
+        assertFalse(MediaSizeBadgePolicy.shouldIncludeVideoDuration(true, false, true));
+    }
+
+    @Test
+    public void omitsDurationForPhotosAndGifs() {
+        assertFalse(MediaSizeBadgePolicy.shouldIncludeVideoDuration(false, false, false));
+        assertFalse(MediaSizeBadgePolicy.shouldIncludeVideoDuration(true, true, false));
+        assertFalse(MediaSizeBadgePolicy.shouldIncludeVideoDuration(false, true, false));
+    }
+
+    @Test
+    public void formatsDurationAndSizeBadgeText() {
+        assertEquals("0:15 · 12.4 MB", MediaSizeBadgePolicy.formatBadgeText("0:15", "12.4 MB"));
+        assertEquals("12.4 MB", MediaSizeBadgePolicy.formatBadgeText(null, "12.4 MB"));
+        assertEquals("12.4 MB", MediaSizeBadgePolicy.formatBadgeText("", "12.4 MB"));
+        assertEquals("0:15", MediaSizeBadgePolicy.formatBadgeText("0:15", null));
+        assertNull(MediaSizeBadgePolicy.formatBadgeText(null, null));
+    }
+
+    @Test
+    public void splitsDurationAndSizeOntoTwoLinesForNarrowAlbumTile() {
+        assertArrayEquals(
+                new String[]{"0:15", "12.4 MB"},
+                MediaSizeBadgePolicy.splitTwoLineBadgeText("0:15 · 12.4 MB")
+        );
+    }
+
+    @Test
+    public void preservesProgressSlashSplitBeforeMiddleDot() {
+        assertArrayEquals(
+                new String[]{"1.2 MB /", "12.4 MB · 10%"},
+                MediaSizeBadgePolicy.splitTwoLineBadgeText("1.2 MB / 12.4 MB · 10%")
+        );
+    }
+
+    @Test
+    public void doesNotSplitPlainFileSize() {
+        assertNull(MediaSizeBadgePolicy.splitTwoLineBadgeText("12.4 MB"));
+        assertNull(MediaSizeBadgePolicy.splitTwoLineBadgeText(""));
+        assertNull(MediaSizeBadgePolicy.splitTwoLineBadgeText(null));
     }
 }

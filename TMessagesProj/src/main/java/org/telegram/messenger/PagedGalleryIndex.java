@@ -817,7 +817,20 @@ public final class PagedGalleryIndex {
             return size() > CACHE_SIZE;
         }
     };
+    private static final int MAX_DEFERRED_PAGES = 16;
+
+    private static final class DeferredPageRequest {
+        final Album album;
+        final int start;
+
+        DeferredPageRequest(Album album, int start) {
+            this.album = album;
+            this.start = start;
+        }
+    }
+
     private final HashSet<String> inFlight = new HashSet<>();
+    private final LinkedHashMap<String, DeferredPageRequest> deferredPages = new LinkedHashMap<>();
     private final HashMap<String, ArrayList<Listener>> pageListeners = new HashMap<>();
     private final HashSet<Integer> unavailable = new HashSet<>();
     private final HashMap<String, MediaController.PhotoEntry> recentByKey = new HashMap<>();
@@ -1114,11 +1127,50 @@ public final class PagedGalleryIndex {
             return;
         }
         if (inFlight.size() >= MAX_REQUESTS) {
+            deferredPages.remove(key);
+            deferredPages.put(key, new DeferredPageRequest(album, start));
+            addPageListener(key, listener);
+            while (deferredPages.size() > MAX_DEFERRED_PAGES) {
+                String eldestKey = deferredPages.keySet().iterator().next();
+                deferredPages.remove(eldestKey);
+                if (!inFlight.contains(eldestKey)) {
+                    pageListeners.remove(eldestKey);
+                }
+            }
+            return;
+        }
+        deferredPages.remove(key);
+        startPageRequest(album, start, key, listener);
+    }
+
+    private void drainDeferredPages() {
+        while (!closed && inFlight.size() < MAX_REQUESTS && !deferredPages.isEmpty()) {
+            String latestKey = null;
+            DeferredPageRequest latestRequest = null;
+            for (Map.Entry<String, DeferredPageRequest> entry : deferredPages.entrySet()) {
+                latestKey = entry.getKey();
+                latestRequest = entry.getValue();
+            }
+            if (latestKey == null || latestRequest == null) {
+                break;
+            }
+            deferredPages.remove(latestKey);
+            if (inFlight.contains(latestKey)) {
+                continue;
+            }
+            startPageRequest(latestRequest.album, latestRequest.start, latestKey, null);
+        }
+    }
+
+    private void startPageRequest(Album album, int start, String key, Listener listener) {
+        int baseSize = album.size() - album.recentEntries.size();
+        if (closed || start < 0 || start >= baseSize) {
+            pageListeners.remove(key);
             return;
         }
         inFlight.add(key);
         addPageListener(key, listener);
-        int end = Math.min(album.size() - album.recentEntries.size(), start + PAGE_SIZE);
+        int end = Math.min(baseSize, start + PAGE_SIZE);
         int[] positions = new int[end - start];
         StringBuilder selection = new StringBuilder();
         ArrayList<String> argList = new ArrayList<>(positions.length * (Build.VERSION.SDK_INT >= 29 ? 2 : 1));
@@ -1141,6 +1193,7 @@ public final class PagedGalleryIndex {
         Thread thread = new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             HashMap<String, MediaController.PhotoEntry> loaded = new HashMap<>();
+            boolean querySucceeded = false;
             Cursor cursor = null;
             try {
                 String[] columns = {
@@ -1159,6 +1212,7 @@ public final class PagedGalleryIndex {
                 }
                 cursor = context.getContentResolver().query(MediaStore.Files.getContentUri("external"), pageColumns,
                         selection.toString(), args, null);
+                querySucceeded = cursor != null;
                 while (cursor != null && cursor.moveToNext()) {
                     String path = cursor.getString(3);
                     if (TextUtils.isEmpty(path)) {
@@ -1182,12 +1236,14 @@ public final class PagedGalleryIndex {
                     loaded.put(mediaKey(volume, id), entry);
                 }
             } catch (Throwable e) {
+                querySucceeded = false;
                 FileLog.e(e);
             } finally {
                 if (cursor != null) {
                     cursor.close();
                 }
             }
+            final boolean finalQuerySucceeded = querySucceeded;
             AndroidUtilities.runOnUIThread(() -> {
                 inFlight.remove(key);
                 ArrayList<Listener> listeners = pageListeners.remove(key);
@@ -1203,7 +1259,7 @@ public final class PagedGalleryIndex {
                     MediaController.PhotoEntry entry = loaded.get(mediaKey(volumes[global], ids[global]));
                     if (entry != null) {
                         cache.put(global, entry);
-                    } else {
+                    } else if (finalQuerySucceeded) {
                         unavailable.add(global);
                     }
                 }
@@ -1212,6 +1268,7 @@ public final class PagedGalleryIndex {
                         pageListener.onPageReady();
                     }
                 }
+                drainDeferredPages();
             });
         }, "gallery-page");
         thread.start();
@@ -1237,6 +1294,7 @@ public final class PagedGalleryIndex {
         closed = true;
         cache.clear();
         inFlight.clear();
+        deferredPages.clear();
         pageListeners.clear();
         unavailable.clear();
         recentByKey.clear();
