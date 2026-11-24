@@ -29,7 +29,11 @@ abstract class TelegramStringsTask : DefaultTask() {
             "AppName",
             "AppNameBeta",
             "Nekogram",
-            "NekogramBeta"
+            "NekogramBeta",
+            "Settings",
+            "AccountSettings",
+            "EditWidgetChatsInfo",
+            "EditWidgetContactsInfo"
         )
 
         private val STABLE_IDS_EXCLUSIONS = setOf(

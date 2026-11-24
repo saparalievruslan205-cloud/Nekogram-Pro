@@ -28,7 +28,7 @@ final class ProUpdateDownloader {
     }
 
     static void show(Activity activity, ProUpdateManager.ProUpdate update) {
-        if (activity.isFinishing()) {
+        if (activity.isFinishing() || activity.isDestroyed()) {
             return;
         }
         DownloadManager manager = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
@@ -42,14 +42,21 @@ final class ProUpdateDownloader {
             manager.remove(id);
             id = -1;
         }
+        String apkName = "Nekogram-Pro-" + update.versionCode + ".apk";
         if (id < 0) {
             try {
+                File downloadsDir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (downloadsDir != null) {
+                    File existingApk = new File(downloadsDir, apkName);
+                    if (existingApk.exists()) {
+                        existingApk.delete();
+                    }
+                }
                 DownloadManager.Request request = new DownloadManager.Request(Uri.parse(update.downloadUrl));
-                request.setTitle(activity.getString(R.string.Nekogram));
+                request.setTitle(ApplicationLoaderImpl.getAppName(activity));
                 request.setMimeType("application/vnd.android.package-archive");
                 request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                request.setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS,
-                        "Nekogram-Pro-" + update.versionCode + ".apk");
+                request.setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS, apkName);
                 id = manager.enqueue(request);
                 activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                         .putLong(KEY_ID, id).putInt(KEY_VERSION, update.versionCode).apply();
@@ -63,9 +70,9 @@ final class ProUpdateDownloader {
         final long downloadId = id;
         Handler handler = new Handler(Looper.getMainLooper());
         AlertDialog progress = new AlertDialog.Builder(activity)
-                .setTitle(activity.getString(R.string.Nekogram))
-                .setMessage(activity.getString(R.string.ProUpdateDownloading))
-                .setNegativeButton(activity.getString(R.string.ProUpdateCancel), (dialog, which) -> {
+                .setTitle(ApplicationLoaderImpl.getAppName(activity))
+                .setMessage(LocaleController.getString(R.string.ProUpdateDownloading))
+                .setNegativeButton(LocaleController.getString(R.string.ProUpdateCancel), (dialog, which) -> {
                     manager.remove(downloadId);
                     clear(activity, downloadId);
                 })
@@ -73,27 +80,28 @@ final class ProUpdateDownloader {
         Runnable poll = new Runnable() {
             @Override
             public void run() {
-                if (activity.isFinishing() || !progress.isShowing()) {
+                if (activity.isFinishing() || activity.isDestroyed() || !progress.isShowing()) {
                     return;
                 }
                 try (Cursor cursor = manager.query(new DownloadManager.Query().setFilterById(downloadId))) {
                     if (cursor == null || !cursor.moveToFirst()) {
                         manager.remove(downloadId);
                         clear(activity, downloadId);
-                        progress.dismiss();
+                        dismissSafely(progress);
                         showError(activity);
                         return;
                     }
                     int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
                     if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        progress.dismiss();
+                        dismissSafely(progress);
                         try {
-                            File apk = new File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
-                                    "Nekogram-Pro-" + update.versionCode + ".apk");
-                            PackageInfo info = activity.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+                            File downloadsDir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                            File apk = downloadsDir == null ? null : new File(downloadsDir, apkName);
+                            PackageInfo info = apk == null ? null
+                                    : activity.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
                             long archiveVersion = info == null ? -1 : Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                                     ? info.getLongVersionCode() : info.versionCode;
-                            if (!apk.isFile() || apk.length() == 0 || info == null
+                            if (apk == null || !apk.isFile() || apk.length() == 0 || info == null
                                     || !activity.getPackageName().equals(info.packageName)
                                     || archiveVersion != update.versionCode) {
                                 manager.remove(downloadId);
@@ -119,7 +127,7 @@ final class ProUpdateDownloader {
                     if (status == DownloadManager.STATUS_FAILED) {
                         manager.remove(downloadId);
                         clear(activity, downloadId);
-                        progress.dismiss();
+                        dismissSafely(progress);
                         showError(activity);
                         return;
                     }
@@ -127,20 +135,34 @@ final class ProUpdateDownloader {
                     long total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
                     String amount = AndroidUtilities.formatFileSize(bytes);
                     progress.setMessage(total > 0
-                            ? activity.getString(R.string.ProUpdateProgress, amount, AndroidUtilities.formatFileSize(total),
+                            ? LocaleController.formatString(R.string.ProUpdateProgress, amount, AndroidUtilities.formatFileSize(total),
                                     (int) Math.min(100, bytes * 100 / total))
-                            : activity.getString(R.string.ProUpdateProgressUnknown, amount));
+                            : LocaleController.formatString(R.string.ProUpdateProgressUnknown, amount));
                     handler.postDelayed(this, POLL_DELAY_MS);
                 } catch (Exception e) {
                     FileLog.e(e);
-                    progress.dismiss();
+                    dismissSafely(progress);
                     showError(activity);
                 }
             }
         };
         progress.setOnDismissListener(dialog -> handler.removeCallbacks(poll));
-        progress.show();
+        try {
+            progress.show();
+        } catch (Exception e) {
+            FileLog.e(e);
+            return;
+        }
         handler.post(poll);
+    }
+
+    private static void dismissSafely(AlertDialog dialog) {
+        if (dialog.isShowing()) {
+            try {
+                dialog.dismiss();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private static void clear(Context context, long id) {
@@ -150,12 +172,16 @@ final class ProUpdateDownloader {
     }
 
     private static void showError(Activity activity) {
-        if (!activity.isFinishing()) {
-            new AlertDialog.Builder(activity)
-                    .setTitle(activity.getString(R.string.Nekogram))
-                    .setMessage(activity.getString(R.string.ProUpdateDownloadFailed))
-                    .setPositiveButton(activity.getString(R.string.ProUpdateOK), null)
-                    .show();
+        if (!activity.isFinishing() && !activity.isDestroyed()) {
+            try {
+                new AlertDialog.Builder(activity)
+                        .setTitle(ApplicationLoaderImpl.getAppName(activity))
+                        .setMessage(LocaleController.getString(R.string.ProUpdateDownloadFailed))
+                        .setPositiveButton(LocaleController.getString(R.string.ProUpdateOK), null)
+                        .show();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
         }
     }
 }

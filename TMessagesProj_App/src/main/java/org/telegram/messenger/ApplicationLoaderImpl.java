@@ -52,23 +52,40 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         return proUpdates.getUpdate();
     }
 
+    static String getAppName(Context context) {
+        try {
+            return context.getString(R.string.Nekogram);
+        } catch (Exception e) {
+            return LocaleController.getString(R.string.Nekogram);
+        }
+    }
+
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
         if (!(update instanceof ProUpdateManager.ProUpdate) || !(context instanceof Activity)) {
             return false;
         }
+        Activity activity = (Activity) context;
+        if (activity.isFinishing() || activity.isDestroyed()) {
+            return false;
+        }
         ProUpdateManager.ProUpdate proUpdate = (ProUpdateManager.ProUpdate) update;
-        String message = context.getString(R.string.ProUpdateAvailable, update.version);
+        String message = LocaleController.formatString(R.string.ProUpdateAvailable, update.version);
         if (update.changelog != null && !update.changelog.isEmpty()) {
             message += "\n\n" + update.changelog;
         }
-        new AlertDialog.Builder(context)
-                .setTitle(context.getString(R.string.Nekogram))
-                .setMessage(message)
-                .setPositiveButton(context.getString(R.string.ProUpdateDownload),
-                        (dialog, which) -> ProUpdateDownloader.show((Activity) context, proUpdate))
-                .setNegativeButton(context.getString(R.string.ProUpdateLater), null)
-                .show();
+        try {
+            new AlertDialog.Builder(activity)
+                    .setTitle(getAppName(activity))
+                    .setMessage(message)
+                    .setPositiveButton(LocaleController.getString(R.string.ProUpdateDownload),
+                            (dialog, which) -> ProUpdateDownloader.show(activity, proUpdate))
+                    .setNegativeButton(LocaleController.getString(R.string.ProUpdateLater), null)
+                    .show();
+        } catch (Exception e) {
+            FileLog.e(e);
+            return false;
+        }
         return true;
     }
 
