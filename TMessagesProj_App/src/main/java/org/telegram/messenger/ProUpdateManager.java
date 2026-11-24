@@ -75,6 +75,8 @@ final class ProUpdateManager {
                     if (checked) {
                         update = result;
                         lastCheck = System.currentTimeMillis();
+                        SharedConfig.lastUpdateCheckTime = lastCheck;
+                        SharedConfig.saveConfig();
                         SharedPreferences.Editor editor = preferences().edit().putLong("last_check", lastCheck);
                         if (result == null) {
                             editor.remove("version").remove("version_code")

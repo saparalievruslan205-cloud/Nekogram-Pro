@@ -197,4 +197,32 @@ public class DiscardedStringResourceUsageTest {
         assertTrue("Runtime Android XML files reference discarded strings:\n"
                 + String.join("\n", violations), violations.isEmpty());
     }
+
+    @Test
+    public void stableIdsExclusionsMatchGeneratedExclusions() throws Exception {
+        File root = repoRoot();
+        File taskFile = new File(root,
+                "build-logic/convention/src/main/kotlin/org/telegram/tasks/TelegramStringsTask.kt");
+        String content = new String(Files.readAllBytes(taskFile.toPath()), StandardCharsets.UTF_8);
+        Set<String> generated = readExcludedStrings(root);
+
+        if (content.contains("STABLE_IDS_EXCLUSIONS = GENERATED_EXCLUSIONS")) {
+            return;
+        }
+        Matcher block = Pattern.compile(
+                "STABLE_IDS_EXCLUSIONS\\s*=\\s*setOf\\(([^)]*)\\)",
+                Pattern.DOTALL
+        ).matcher(content);
+        assertTrue("Expected STABLE_IDS_EXCLUSIONS in TelegramStringsTask.kt", block.find());
+        Set<String> stable = new HashSet<>();
+        Matcher name = QUOTED_NAME.matcher(block.group(1));
+        while (name.find()) {
+            stable.add(name.group(1));
+        }
+        assertEquals(
+                "Every string kept in resources.arsc (GENERATED_EXCLUSIONS) must also be in STABLE_IDS_EXCLUSIONS to avoid sparse ResTable_type bloat",
+                generated,
+                stable
+        );
+    }
 }

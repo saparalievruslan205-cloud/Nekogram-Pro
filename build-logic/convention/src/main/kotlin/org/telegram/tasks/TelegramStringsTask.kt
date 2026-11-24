@@ -36,12 +36,7 @@ abstract class TelegramStringsTask : DefaultTask() {
             "EditWidgetContactsInfo"
         )
 
-        private val STABLE_IDS_EXCLUSIONS = setOf(
-            "AppName",
-            "AppNameBeta",
-            "Nekogram",
-            "NekogramBeta"
-        )
+        private val STABLE_IDS_EXCLUSIONS = GENERATED_EXCLUSIONS
 
         private const val STRING_RESOURCE_ID_BASE = 0x7F0FFFFE
     }

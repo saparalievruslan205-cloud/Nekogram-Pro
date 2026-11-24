@@ -196,7 +196,9 @@ public class NekoExperimentalSettingsActivity extends BaseNekoSettingsActivity {
                     @Override
                     public void end() {
                         item.subtext = UpdateHelper.formatDateUpdate(SharedConfig.lastUpdateCheckTime);
-                        listView.adapter.notifyItemChanged(position);
+                        if (listView != null && listView.adapter != null) {
+                            listView.adapter.notifyItemChanged(position);
+                        }
                     }
                 });
                 item.subtext = LocaleController.getString(R.string.CheckingUpdate);
